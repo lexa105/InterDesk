@@ -32,13 +32,14 @@ You should see test.jpg <size> bytes
 #include <Arduino.h>
 #include <WiFi.h>
 
+
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 
 #include <FS.h>
 
 // ===== SD backend selection =====
-#define USE_SD_MMC 0   // set to 1 if you wired SD to SDMMC (4-bit/1-bit) and want SD_MMC
+#define USE_SD_MMC 1   // set to 1 if you wired SD to SDMMC (4-bit/1-bit) and want SD_MMC
 
 #if USE_SD_MMC
   #include <SD_MMC.h>
@@ -50,6 +51,7 @@ You should see test.jpg <size> bytes
   // If using SPI SD, set your CS pin here:
   static const int SD_CS_PIN = 5; // change to your wiring
 #endif
+
 
 // ===== Wi-Fi AP =====
 static const char* AP_SSID = "ESP32_IMG";
@@ -314,15 +316,28 @@ static void setupRoutes() {
 
 void setup() {
   Serial.begin(115200);
-  delay(200);
+  delay(2000);
 
   // Init SD
 #if USE_SD_MMC
-  if (!SD_MMC.begin()) {
-    Serial.println("[SD] SD_MMC.begin() failed");
+  int clk = 36;
+  int cmd = 35;
+  int d0  = 37;
+  int d1  = 38;
+  int d2  = 33;
+  int d3  = 34;
+  bool onebit = false; // false = 4-bit
+
+  SD_MMC.setPins(clk, cmd, d0, d1, d2, d3);
+
+  if (!SD_MMC.begin("/sdcard", onebit)) {
+    Serial.println("SD_MMC mount failed");
   } else {
-    Serial.println("[SD] SD_MMC mounted");
+    Serial.println("SD_MMC mounted OK");
   }
+
+
+
 #else
   SPI.begin(); // uses default pins; set if you have custom wiring
   if (!SD.begin(SD_CS_PIN)) {

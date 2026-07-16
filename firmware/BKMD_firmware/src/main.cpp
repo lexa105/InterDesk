@@ -260,20 +260,27 @@ void loop() {
 //combine mouse nad keyboad packet? why not
 //keyboard send from PC both PRESS and RELASE PACKET
 bool hid_decode(BlePacket pkt){
-  uint8_t usageID = pkt.data[0];
-  if(usageID != 0){
-    size_t pressed = keyboard.pressRaw(usageID);
-    
-    //tohle zmizi az se bude posilat i release //delay
-    scheduleKeyboardRelease(200); 
+  // 1. Check for standard 8-byte HID keyboard report
+  if (pkt.len == 8) {
+    // Send the raw 8-byte report directly to the PC.
+    // This allows the Electron app to control both press and release states perfectly.
+    keyboard.sendReport((KeyReport*)pkt.data);
+    return true;
+  }
 
-    if(pressed >= 1){return true;}
-    else {return false;}
-  } //else if(usageID n Release){ keyboard.releaseRaw(usageID);}
+  // 2. Fallback for legacy 1-byte usageID behavior
+  if (pkt.len == 1) {
+    uint8_t usageID = pkt.data[0];
+    if (usageID != 0) {
+      size_t pressed = keyboard.pressRaw(usageID);
+      // Still need the auto-release for legacy 1-byte packets
+      scheduleKeyboardRelease(200); 
+      return (pressed >= 1);
+    }
+  }
+
+  // Future: add mouse handle (pkt.len == 4 or similar)
   return false;
-  
-  //mouse handle 
-
 }
 
 //handles more different packets

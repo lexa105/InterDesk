@@ -12,5 +12,8 @@
     "skipLibCheck": true,
     // // add global types
     // "types": ["../../types"]
-  }
+  },
+  // preload runs through Electron's sandboxed script loader, which cannot
+  // parse ESM import/export syntax - it gets its own CommonJS build below.
+  "exclude": ["preload/**/*"]
 }
