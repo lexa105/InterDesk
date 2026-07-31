@@ -24,8 +24,6 @@ void BleServer::start() {
     ); 
     pDataCharacteristic->setCallbacks(&_dataCallbacks);
 
-    pService->start();
-
     _adv = NimBLEDevice::getAdvertising();
     _adv->setName("BLE-Dongle");
     _adv->addServiceUUID(pService->getUUID());

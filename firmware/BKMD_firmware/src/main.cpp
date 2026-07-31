@@ -8,32 +8,59 @@
 #include "freertos/semphr.h"
 #include "display.h"
 
+
 #define PIN_BTN1 0
 
 #include "USB.h"
 #include "USBHIDMouse.h"
 #include "USBHIDKeyboard.h"
 
+//optimization, timing tests
+#include "esp_timer.h"
+#include "esp_cpu.h"
+
+#ifndef ENABLE_BUTTON_TASK
+#define ENABLE_BUTTON_TASK 0
+#endif
+
+constexpr UBaseType_t BLE_QUEUE_LENGTH = 16;
+constexpr uint32_t PERF_REPORT_PERIOD_MS = 5000;
+
 static QueueHandle_t bleRxQ;
 static BleServer* ble = nullptr;
 
 static TaskHandle_t decoderTaskHandle = nullptr;
 static TaskHandle_t displayTaskHandle = nullptr;
+#if ENABLE_BUTTON_TASK
 static TaskHandle_t buttonTaskHandle = nullptr;
+#endif
 
-void startTasks();
+bool startTasks();
 void DecoderTask(void*);
 void DisplayTask(void*);
+#if ENABLE_BUTTON_TASK
 void ButtonTask(void*);
+#endif
 
 
 UiState gUi; //mutexed global instance 
 SemaphoreHandle_t uiMtx;
 EventGroupHandle_t uiEv;
+EventGroupHandle_t taskReadyEv;
 enum : EventBits_t {
   UI_EV_STATE  = (1 << 0),
   UI_EV_DEBUG  = (1 << 1),
   UI_EV_ALL    = UI_EV_STATE | UI_EV_DEBUG
+};
+enum : EventBits_t {
+  TASK_READY_DECODER = (1 << 0),
+  TASK_READY_DISPLAY = (1 << 1),
+#if ENABLE_BUTTON_TASK
+  TASK_READY_BUTTON  = (1 << 2),
+  TASK_READY_ALL = TASK_READY_DECODER | TASK_READY_DISPLAY | TASK_READY_BUTTON
+#else
+  TASK_READY_ALL = TASK_READY_DECODER | TASK_READY_DISPLAY
+#endif
 };
 
 USBHIDKeyboard keyboard;
@@ -44,11 +71,20 @@ static void ui_set_debug(const char* s);
 static void ui_toggle_airdrop();
 
 
+
 void setup() {
   Serial.begin(115200);
+  const uint32_t serialWaitStarted = millis();
+  while (!Serial && millis() - serialWaitStarted < 2000) {
+    delay(10);
+  }
   
   //Create BLE recieved queue
-  bleRxQ = xQueueCreate(16, sizeof(BlePacket));
+  bleRxQ = xQueueCreate(BLE_QUEUE_LENGTH, sizeof(BlePacket));
+  if (bleRxQ == nullptr) {
+    Serial.println("ERROR: BLE queue allocation failed");
+    return;
+  }
 
   // start BLE
   ble = new BleServer(bleRxQ);
@@ -58,18 +94,47 @@ void setup() {
 
   keyboard.begin();
   mouse.begin();
-  USB.begin();
+  // USB CDC on boot starts the composite USB device before setup().
 
   //start decoder task
-  startTasks();
-    
+
+  const uint64_t t1 = esp_timer_get_time();
+  const uint32_t c1 = esp_cpu_get_cycle_count();
+  const bool tasksReady = startTasks();
+  const uint32_t elapsedCycles = esp_cpu_get_cycle_count() - c1;
+  const uint64_t elapsedUs = esp_timer_get_time() - t1;
+
+#ifdef PERF_BUILD_O2
+  constexpr const char* optimization = "O2";
+#elif defined(PERF_BUILD_OS)
+  constexpr const char* optimization = "Os";
+#else
+  constexpr const char* optimization = "default";
+#endif
+  //initial serial print
+  Serial.printf(
+      "PERF build=%s tasks_ready=%s startup_us=%llu startup_cycles=%u "
+      "queue_item_bytes=%u queue_storage_bytes=%u button_task=%s\n",
+      optimization,
+      tasksReady ? "yes" : "no",
+      static_cast<unsigned long long>(elapsedUs),
+      elapsedCycles,
+      static_cast<unsigned>(sizeof(BlePacket)),
+      static_cast<unsigned>(BLE_QUEUE_LENGTH * sizeof(BlePacket)),
+      ENABLE_BUTTON_TASK ? "on" : "off");
+
 }
 
-void startTasks() {
+bool startTasks() {
   uiMtx = xSemaphoreCreateMutex();
   uiEv  = xEventGroupCreate();
+  taskReadyEv = xEventGroupCreate();
 
-  xTaskCreatePinnedToCore(
+  if (uiMtx == nullptr || uiEv == nullptr || taskReadyEv == nullptr) {
+    return false;
+  }
+
+  const BaseType_t decoderCreated = xTaskCreatePinnedToCore(
     DecoderTask,        // task function
     "decoder",          // name
     6144,               // stack bytes (start with 6 KB)
@@ -79,7 +144,7 @@ void startTasks() {
     1                   // core: 0 or 1
   );
 
-  xTaskCreatePinnedToCore(
+  const BaseType_t displayCreated = xTaskCreatePinnedToCore(
     DisplayTask,
     "display",
     6144,     // display libs often need stack
@@ -89,7 +154,8 @@ void startTasks() {
     1         // core 1
   );
 
-  xTaskCreatePinnedToCore(
+#if ENABLE_BUTTON_TASK
+  const BaseType_t buttonCreated = xTaskCreatePinnedToCore(
   ButtonTask,        // task function
   "button",
   2048,              // stack (small task)
@@ -98,23 +164,84 @@ void startTasks() {
   &buttonTaskHandle, // handle (optional)
   1                  // core 1
   );
+#else
+  constexpr BaseType_t buttonCreated = pdPASS;
+#endif
+
+  if (decoderCreated != pdPASS || displayCreated != pdPASS || buttonCreated != pdPASS) {
+    return false;
+  }
+
+  const EventBits_t ready = xEventGroupWaitBits(
+      taskReadyEv, TASK_READY_ALL, pdFALSE, pdTRUE, pdMS_TO_TICKS(5000));
+  return (ready & TASK_READY_ALL) == TASK_READY_ALL;
 }
 
 
 void DecoderTask(void*) {
   BlePacket pkt;
-  static uint32_t last = 0;
+  uint32_t lastReportMs = millis();
+  uint32_t processed = 0;
+  uint32_t invalid = 0;
+  uint64_t totalQueueLatencyUs = 0;
+  uint32_t maxQueueLatencyUs = 0;
+  uint64_t totalDecodeUs = 0;
+  uint32_t maxDecodeUs = 0;
+  uint64_t totalDecodeCycles = 0;
+  uint32_t maxDecodeCycles = 0;
+
+  xEventGroupSetBits(taskReadyEv, TASK_READY_DECODER);
+
   for (;;) {
-    if (xQueueReceive(bleRxQ, &pkt, portMAX_DELAY) == pdTRUE) {
-      if (!hid_decode(pkt)) {
+    if (xQueueReceive(bleRxQ, &pkt, pdMS_TO_TICKS(250)) == pdTRUE) {
+      const uint32_t decodeStartedUs = static_cast<uint32_t>(esp_timer_get_time());
+      const uint32_t queueLatencyUs = decodeStartedUs - pkt.receivedUs;
+      const uint32_t decodeStartedCycles = esp_cpu_get_cycle_count();
+      const bool valid = hid_decode(pkt);
+      const uint32_t decodeCycles =
+          esp_cpu_get_cycle_count() - decodeStartedCycles;
+      const uint32_t decodeUs =
+          static_cast<uint32_t>(esp_timer_get_time()) - decodeStartedUs;
+
+      ++processed;
+      totalQueueLatencyUs += queueLatencyUs;
+      totalDecodeUs += decodeUs;
+      totalDecodeCycles += decodeCycles;
+      maxQueueLatencyUs = max(maxQueueLatencyUs, queueLatencyUs);
+      maxDecodeUs = max(maxDecodeUs, decodeUs);
+      maxDecodeCycles = max(maxDecodeCycles, decodeCycles);
+
+      if (!valid) {
+        ++invalid;
         ui_set_debug("HID BAD");
       }
     }
 
-    //
-    if (millis() - last > 5000) {
-      last = millis();
-      Serial.printf("Decoder stack HW=%u\n", uxTaskGetStackHighWaterMark(nullptr));
+    const uint32_t nowMs = millis();
+    if (nowMs - lastReportMs >= PERF_REPORT_PERIOD_MS) {
+      lastReportMs = nowMs;
+      const BleRxStats rx = ble->rxStats();
+      const uint32_t avgQueueLatencyUs = processed
+          ? static_cast<uint32_t>(totalQueueLatencyUs / processed) : 0;
+      const uint32_t avgDecodeUs = processed
+          ? static_cast<uint32_t>(totalDecodeUs / processed) : 0;
+      const uint32_t avgDecodeCycles = processed
+          ? static_cast<uint32_t>(totalDecodeCycles / processed) : 0;
+      const uint32_t dropPpm = rx.received
+          ? static_cast<uint32_t>((static_cast<uint64_t>(rx.dropped) * 1000000ULL) /
+                                  rx.received)
+          : 0;
+
+      Serial.printf(
+          "PERF rx=%u queued=%u dropped=%u drop_ppm=%u depth_max=%u "
+          "processed=%u invalid=%u queue_us_avg=%u queue_us_max=%u "
+          "decode_us_avg=%u decode_us_max=%u decode_cycles_avg=%u "
+          "decode_cycles_max=%u stack_hwm=%u heap_free=%u heap_min=%u\n",
+          rx.received, rx.queued, rx.dropped, dropPpm, rx.maxQueueDepth,
+          processed, invalid, avgQueueLatencyUs, maxQueueLatencyUs,
+          avgDecodeUs, maxDecodeUs, avgDecodeCycles, maxDecodeCycles,
+          static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)),
+          ESP.getFreeHeap(), ESP.getMinFreeHeap());
     }
 
   }
@@ -124,6 +251,7 @@ void DecoderTask(void*) {
 void DisplayTask(void* arg) {
   Display disp;
   disp.display_init();
+  xEventGroupSetBits(taskReadyEv, TASK_READY_DISPLAY);
 
   //struct with all display data
   UiState snap;
@@ -157,8 +285,10 @@ void DisplayTask(void* arg) {
   }
 }
 
+#if ENABLE_BUTTON_TASK
 void ButtonTask(void*) {
   pinMode(PIN_BTN1, INPUT_PULLUP);
+  xEventGroupSetBits(taskReadyEv, TASK_READY_BUTTON);
 
   const TickType_t period = pdMS_TO_TICKS(5); //5ms to tick
   const uint32_t debounce_ms = 25;
@@ -191,6 +321,7 @@ void ButtonTask(void*) {
     }
   }
 }
+#endif
 
 void loop() {
 }
