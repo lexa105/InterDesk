@@ -1,8 +1,11 @@
 {
   "appId": "com.lexatuan.bkmd",
-  "files": ["dist-electron", "dist-react"],
-  "extraResources": ["dist-electron/preload.cjs", "src/assets/**"],
-  "icon": "./desktopIcon.png",
+  "productName": "BKMD File Transfer",
+  "files": [
+    "dist-electron/**/*",
+    "dist-react/**/*",
+    "package.json"
+  ],
   "mac": {
     "target": "dmg"
   },

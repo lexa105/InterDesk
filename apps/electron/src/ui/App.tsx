@@ -1,214 +1,266 @@
-import { useCallback, useEffect, useState } from 'react'
-import type { BluetoothDevice, ConnectionState } from './electron-api'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import type {
+  DeviceStatus,
+  RemoteFile,
+  SelectedFile,
+  UploadProgress,
+} from './electron-api'
 
-function statusLabel(available: boolean | null, scanning: boolean, connectionState: ConnectionState) {
-  if (available === null) return 'Checking...'
-  if (!available) return 'Bluetooth unavailable'
-  if (connectionState === 'connected') return 'Connected'
-  if (connectionState === 'connecting') return 'Connecting...'
-  if (scanning) return 'Scanning...'
-  return 'Idle'
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MiB`
+}
+
+function modeLabel(status: DeviceStatus | null): string {
+  if (!status) return 'Not connected'
+  if (status.mode === 'http_transfer') return 'HTTP Transfer'
+  if (status.mode === 'usb_storage') return 'USB Storage'
+  return 'Storage error'
 }
 
 function App() {
-  const [available, setAvailable] = useState<boolean | null>(null)
-  const [scanning, setScanning] = useState(false)
-  const [devices, setDevices] = useState<BluetoothDevice[]>([])
-  const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected')
-  const [connectedDevice, setConnectedDevice] = useState<BluetoothDevice | null>(null)
-  const [connectingId, setConnectingId] = useState<string | null>(null)
+  const [baseUrl, setBaseUrl] = useState('http://192.168.4.1')
+  const [status, setStatus] = useState<DeviceStatus | null>(null)
+  const [selectedFile, setSelectedFile] = useState<SelectedFile | null>(null)
+  const [files, setFiles] = useState<RemoteFile[]>([])
+  const [progress, setProgress] = useState<UploadProgress | null>(null)
+  const [connecting, setConnecting] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [downloading, setDownloading] = useState<string | null>(null)
+  const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
-    let cancelled = false
+  const clearNotices = useCallback(() => {
+    setMessage(null)
+    setError(null)
+  }, [])
 
-    Promise.all([
-      window.bkmd.isBluetoothAvailable(),
-      window.bkmd.isScanning(),
-      window.bkmd.getConnectionState(),
-      window.bkmd.getDevices(),
-    ]).then(([isAvailable, isScanning, state, initialDevices]) => {
-      if (cancelled) return
-      setAvailable(isAvailable)
-      setScanning(isScanning)
-      setConnectionState(state)
-      setDevices(initialDevices)
-    })
-
-    const unsubscribeDiscovered = window.bkmd.onDeviceDiscovered((device) => {
-      setDevices((prev) => {
-        const idx = prev.findIndex((d) => d.id === device.id)
-        if (idx === -1) return [...prev, device]
-        const next = [...prev]
-        next[idx] = device
-        return next
-      })
-    })
-
-    const unsubscribeScan = window.bkmd.onScanStateChanged(setScanning)
-
-    const unsubscribeConnection = window.bkmd.onConnectionStateChanged((state, device) => {
-      setConnectionState(state)
-      setConnectedDevice(device)
-      if (state !== 'connecting') setConnectingId(null)
-    })
-
-    return () => {
-      cancelled = true
-      unsubscribeDiscovered()
-      unsubscribeScan()
-      unsubscribeConnection()
+  const refreshFiles = useCallback(async (url: string) => {
+    const result = await window.bkmd.listFiles(url)
+    if (result.ok) {
+      setFiles([...result.value].sort((a, b) => a.name.localeCompare(b.name)))
+    } else {
+      setFiles([])
+      setError(result.error)
     }
   }, [])
 
-  const toggleScan = useCallback(async () => {
-    setError(null)
-    if (scanning) {
-      await window.bkmd.stopScan()
-    } else {
-      setDevices([])
-      await window.bkmd.startScan()
+  const connect = useCallback(async () => {
+    setConnecting(true)
+    setFiles([])
+    const result = await window.bkmd.getStatus(baseUrl)
+    setConnecting(false)
+    if (!result.ok) {
+      setStatus(null)
+      setError(result.error)
+      return
     }
-  }, [scanning])
 
-  const handleConnect = useCallback(async (deviceId: string) => {
-    setError(null)
-    setConnectingId(deviceId)
-    const result = await window.bkmd.connect(deviceId)
+    setStatus(result.value)
+    if (result.value.mode === 'http_transfer') {
+      await refreshFiles(baseUrl)
+    }
+  }, [baseUrl, refreshFiles])
+
+  useEffect(() => {
+    void window.bkmd.getDefaultUrl().then(setBaseUrl)
+    const unsubscribe = window.bkmd.onUploadProgress(setProgress)
+    return unsubscribe
+  }, [])
+
+  const chooseFile = useCallback(async () => {
+    clearNotices()
+    const result = await window.bkmd.selectFile()
     if (!result.ok) {
       setError(result.error)
-      setConnectingId(null)
+      return
     }
-  }, [])
+    if (result.value) {
+      setSelectedFile(result.value)
+      setProgress(null)
+      if (result.value.size > MAX_UPLOAD_BYTES) {
+        setError('This file exceeds the 10 MiB upload limit.')
+      }
+    }
+  }, [clearNotices])
 
-  const handleDisconnect = useCallback(async () => {
-    setError(null)
-    await window.bkmd.disconnect()
-  }, [])
+  const sendFile = useCallback(async () => {
+    if (!selectedFile) return
+    clearNotices()
+    setUploading(true)
+    setProgress({ sent: 0, total: selectedFile.size })
+    const result = await window.bkmd.uploadFile(baseUrl, selectedFile.path)
+    setUploading(false)
+    if (!result.ok) {
+      setError(result.error)
+      return
+    }
+    setMessage(`Sent ${result.value.name} (${formatBytes(result.value.size)}).`)
+    await connect()
+  }, [baseUrl, clearNotices, connect, selectedFile])
 
-  const sortedDevices = [...devices].sort((a, b) => b.rssi - a.rssi)
+  const download = useCallback(async (name: string) => {
+    clearNotices()
+    setDownloading(name)
+    const result = await window.bkmd.downloadFile(baseUrl, name)
+    setDownloading(null)
+    if (!result.ok) {
+      if (result.error !== 'Download canceled.') setError(result.error)
+      return
+    }
+    setMessage(`Saved ${name} to ${result.value.path}.`)
+  }, [baseUrl, clearNotices])
+
+  const progressPercent = useMemo(() => {
+    if (!progress) return 0
+    if (progress.total === 0) return uploading ? 0 : 100
+    return Math.min(100, Math.round((progress.sent / progress.total) * 100))
+  }, [progress, uploading])
+
+  const canUpload = status?.mode === 'http_transfer'
+    && selectedFile !== null
+    && selectedFile.size <= (status.maxUploadBytes || MAX_UPLOAD_BYTES)
+    && !uploading
+    && downloading === null
 
   return (
-
-    <div className="flex h-screen w-screen overflow-hidden bg-slate-950 text-slate-200">
-      {/* Sidebar */}
-      <aside className="w-64 bg-slate-900 border-r border-slate-800 flex flex-col">
-        <div className="p-6">
-          <h1 className="text-2xl font-bold text-blue-500 tracking-tight">BKMD</h1>
-          <p className="text-xs text-slate-500 uppercase font-semibold mt-1">Control Center</p>
-        </div>
-
-        <nav className="flex-1 px-4 space-y-2">
-          <button className="w-full text-left px-4 py-2 rounded-lg bg-slate-800 text-white font-medium transition-colors">
-            Devices
-          </button>
-          <button className="w-full text-left px-4 py-2 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors" disabled>
-            Keylogs
-          </button>
-          <button className="w-full text-left px-4 py-2 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors" disabled>
-            Settings
-          </button>
-        </nav>
-      </aside>
-
-      {/* Main Content */}
-      <main className="flex-1 flex flex-col overflow-auto">
-        {/* Top Header */}
-        <header className="h-16 border-b border-slate-800 flex items-center justify-between px-8 bg-slate-900/50 backdrop-blur-md sticky top-0 z-10">
-          <h2 className="text-lg font-semibold">Device Manager</h2>
-          <div className="flex items-center gap-4">
-            <span className="text-sm text-slate-400">
-              Status: <span className="text-blue-400 font-mono">{statusLabel(available, scanning, connectionState)}</span>
-            </span>
-            <button
-              onClick={toggleScan}
-              disabled={available === false}
-              className="bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 disabled:cursor-not-allowed text-white px-4 py-1.5 rounded-md text-sm font-medium transition-colors shadow-lg shadow-blue-900/20"
-            >
-              {scanning ? 'Stop Scan' : 'Scan for Devices'}
-            </button>
+    <main className="app-shell">
+      <section className="panel">
+        <header className="app-header">
+          <div>
+            <p className="eyebrow">BKMD</p>
+            <h1>HTTP file transfer</h1>
+            <p className="subtitle">Send a file to the ESP32-S3 SD card, then expose it over USB.</p>
           </div>
+          <span className={`mode-badge mode-${status?.mode ?? 'offline'}`}>
+            {modeLabel(status)}
+          </span>
         </header>
 
-        {/* Dashboard Content */}
-        <div className="p-8 space-y-8">
-
-          {available === false && (
-            <div className="bg-red-500/10 border border-red-500/30 text-red-400 rounded-lg px-4 py-3 text-sm">
-              Bluetooth is not available or powered off on this machine.
-            </div>
-          )}
-
-          {error && (
-            <div className="bg-red-500/10 border border-red-500/30 text-red-400 rounded-lg px-4 py-3 text-sm">
-              {error}
-            </div>
-          )}
-
-          {/* Device Table */}
-          <section>
-            <h3 className="text-xl font-bold mb-4">Nearby Devices</h3>
-            <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
-              <table className="w-full text-left">
-                <thead className="bg-slate-800/50 border-b border-slate-800 text-xs uppercase text-slate-400">
-                  <tr>
-                    <th className="px-6 py-4 font-semibold tracking-wider">Device Name</th>
-                    <th className="px-6 py-4 font-semibold tracking-wider">Signal</th>
-                    <th className="px-6 py-4 font-semibold tracking-wider">Status</th>
-                    <th className="px-6 py-4 font-semibold tracking-wider text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-800">
-                  {sortedDevices.length === 0 && (
-                    <tr>
-                      <td colSpan={4} className="px-6 py-8 text-center text-slate-500 text-sm">
-                        {scanning ? 'Scanning for nearby devices…' : 'No devices found. Start a scan to discover nearby devices.'}
-                      </td>
-                    </tr>
-                  )}
-                  {sortedDevices.map((device) => {
-                    const isConnected = connectedDevice?.id === device.id
-                    const isConnecting = connectingId === device.id
-                    return (
-                      <tr key={device.id} className="hover:bg-slate-800/30 transition-colors">
-                        <td className="px-6 py-4 font-medium">{device.name}</td>
-                        <td className="px-6 py-4 text-slate-400 text-sm font-mono">{device.rssi} dBm</td>
-                        <td className="px-6 py-4">
-                          <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase ${
-                            isConnected ? 'bg-green-500/10 text-green-500' : isConnecting ? 'bg-yellow-500/10 text-yellow-500' : 'bg-slate-700 text-slate-400'
-                          }`}>
-                            {isConnected ? 'Connected' : isConnecting ? 'Connecting' : 'Available'}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4 text-right">
-                          {isConnected ? (
-                            <button
-                              onClick={handleDisconnect}
-                              className="text-red-400 hover:text-red-300 text-sm font-medium"
-                            >
-                              Disconnect
-                            </button>
-                          ) : (
-                            <button
-                              onClick={() => handleConnect(device.id)}
-                              disabled={isConnecting || connectionState === 'connecting' || !device.connectable}
-                              className="text-blue-400 hover:text-blue-300 disabled:text-slate-600 disabled:cursor-not-allowed text-sm font-medium"
-                            >
-                              {isConnecting ? 'Connecting…' : 'Connect'}
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </section>
-
+        <div className="connection-row">
+          <label className="field grow">
+            <span>Device URL</span>
+            <input
+              value={baseUrl}
+              onChange={(event) => setBaseUrl(event.target.value)}
+              disabled={connecting || uploading}
+              spellCheck={false}
+            />
+          </label>
+          <button
+            className="secondary-button"
+            onClick={() => {
+              clearNotices()
+              void connect()
+            }}
+            disabled={connecting || uploading}
+          >
+            {connecting ? 'Connecting…' : status ? 'Refresh' : 'Connect'}
+          </button>
         </div>
-      </main>
-    </div>
+
+        {!status && (
+          <div className="instruction">
+            Join the <strong>ESP32_IMG</strong> Wi-Fi network, then press Connect.
+          </div>
+        )}
+        {status?.mode === 'usb_storage' && (
+          <div className="instruction warning">
+            The SD card is mounted over USB. Long-press the ESP32 button to enter HTTP Transfer mode, then refresh.
+          </div>
+        )}
+        {status?.mode === 'http_transfer' && (
+          <div className="instruction success">
+            Transfer mode is active. Long-press the button again after transfers finish to remount USB storage.
+          </div>
+        )}
+        {status?.mode === 'error' && (
+          <div className="instruction danger">
+            Storage initialization failed. Insert a FAT32 SD card and reboot the device.
+          </div>
+        )}
+
+        {error && <div className="notice error-notice">{error}</div>}
+        {message && <div className="notice success-notice">{message}</div>}
+
+        <section className="transfer-card">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">Upload</p>
+              <h2>Choose one file</h2>
+            </div>
+            <span className="limit">Maximum 10 MiB</span>
+          </div>
+
+          <div className="file-picker">
+            <div className="file-description">
+              <strong>{selectedFile?.name ?? 'No file selected'}</strong>
+              <span>{selectedFile ? formatBytes(selectedFile.size) : 'Any file type'}</span>
+            </div>
+            <button className="secondary-button" onClick={() => void chooseFile()} disabled={uploading}>
+              Choose file
+            </button>
+          </div>
+
+          {progress && (
+            <div className="progress-block" aria-live="polite">
+              <div className="progress-label">
+                <span>{uploading ? 'Sending…' : 'Transfer progress'}</span>
+                <span>{progressPercent}%</span>
+              </div>
+              <div className="progress-track">
+                <div className="progress-fill" style={{ width: `${progressPercent}%` }} />
+              </div>
+            </div>
+          )}
+
+          <button className="primary-button" onClick={() => void sendFile()} disabled={!canUpload}>
+            {uploading ? 'Sending file…' : 'Send to ESP32'}
+          </button>
+        </section>
+
+        <section className="files-section">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">Storage</p>
+              <h2>Received files</h2>
+            </div>
+            <button
+              className="text-button"
+              onClick={() => void refreshFiles(baseUrl)}
+              disabled={status?.mode !== 'http_transfer' || uploading || downloading !== null}
+            >
+              Refresh list
+            </button>
+          </div>
+
+          <div className="file-list">
+            {files.length === 0 ? (
+              <p className="empty-state">
+                {status?.mode === 'http_transfer' ? 'No received files yet.' : 'File listing is available in transfer mode.'}
+              </p>
+            ) : files.map((file) => (
+              <div className="remote-file" key={file.name}>
+                <div className="file-description">
+                  <strong>{file.name}</strong>
+                  <span>{formatBytes(file.size)}</span>
+                </div>
+                <button
+                  className="text-button"
+                  onClick={() => void download(file.name)}
+                  disabled={downloading !== null || uploading}
+                >
+                  {downloading === file.name ? 'Saving…' : 'Download'}
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+      </section>
+    </main>
   )
 }
 

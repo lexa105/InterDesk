@@ -1,50 +1,47 @@
-# React + TypeScript + Vite
+# BKMD File Transfer
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A small Electron client for sending files to the BKMD ESP32-S3 over HTTP. The
+app intentionally contains no Bluetooth/HID functionality on this test branch.
 
-Currently, two official plugins are available:
+## Device workflow
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react/README.md) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+1. Flash `firmware/AirdropOnly_firmware` and insert a FAT32-formatted SD card.
+2. The device boots in read-only USB Storage mode and exposes `BKMD Storage`.
+3. Join the `ESP32_IMG` Wi-Fi network with password `12345678`.
+4. Long-press GPIO 0 for at least 750 ms. The USB disk disappears and HTTP
+   Transfer mode becomes active.
+5. Open the app, connect to `http://192.168.4.1`, choose a file up to 10 MiB,
+   and send it.
+6. Long-press GPIO 0 again after all transfers finish. The USB disk remounts
+   and the received file is available under the `upl` directory.
 
-## Expanding the ESLint configuration
+The USB host and firmware never intentionally access the FAT32 filesystem at
+the same time. USB writes are rejected; create or replace files through HTTP.
 
-If you are developing a production application, we recommend updating the configuration to enable type aware lint rules:
+## Development
 
-- Configure the top-level `parserOptions` property like this:
-
-```js
-export default tseslint.config({
-  languageOptions: {
-    // other options...
-    parserOptions: {
-      project: ['./tsconfig.node.json', './tsconfig.app.json'],
-      tsconfigRootDir: import.meta.dirname,
-    },
-  },
-})
+```sh
+npm install
+npm run dev
 ```
 
-- Replace `tseslint.configs.recommended` to `tseslint.configs.recommendedTypeChecked` or `tseslint.configs.strictTypeChecked`
-- Optionally add `...tseslint.configs.stylisticTypeChecked`
-- Install [eslint-plugin-react](https://github.com/jsx-eslint/eslint-plugin-react) and update the config:
+Validation commands:
 
-```js
-// eslint.config.js
-import react from 'eslint-plugin-react'
-
-export default tseslint.config({
-  // Set the react version
-  settings: { react: { version: '18.3' } },
-  plugins: {
-    // Add the react plugin
-    react,
-  },
-  rules: {
-    // other rules...
-    // Enable its recommended rules
-    ...react.configs.recommended.rules,
-    ...react.configs['jsx-runtime'].rules,
-  },
-})
+```sh
+npm run lint
+npm run build
 ```
+
+Distribution targets are available through `npm run dist:mac`,
+`npm run dist:win`, and `npm run dist:linux`.
+
+## Firmware HTTP API
+
+- `GET /status` is available in every mode.
+- `POST /upload_raw?name=FILE` accepts an `application/octet-stream` body in
+  HTTP Transfer mode.
+- `GET /list` returns received file names and sizes in HTTP Transfer mode.
+- `GET /download?name=FILE` downloads a stored file in HTTP Transfer mode.
+
+All API errors are JSON. The upload limit is 10 MiB and only one upload may be
+active at a time.

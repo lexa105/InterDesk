@@ -4,9 +4,10 @@
     "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "outDir": "../../dist-electron",
+    "outDir": "../../../dist-electron/preload",
+    "rootDir": ".",
     "skipLibCheck": true,
     "types": ["node", "electron"]
   },
-  "exclude": ["preload/**/*"]
+  "include": ["index.cts"]
 }
