@@ -2,14 +2,11 @@
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include <FS.h>
-#include <SD_MMC.h>
+#include <SD.h>
+#include <SPI.h>
 #include <USB.h>
 #include <USBMSC.h>
 #include <WiFi.h>
-
-#include "driver/sdmmc_types.h"
-#include "sdmmc_cmd.h"
-#include "vfs_api.h"
 
 namespace {
 
@@ -23,44 +20,16 @@ constexpr uint32_t BUTTON_DEBOUNCE_MS = 25;
 constexpr uint32_t BUTTON_LONG_PRESS_MS = 750;
 constexpr uint32_t MSC_DETACH_SETTLE_MS = 250;
 
-constexpr int SD_CLK_PIN = 36;
-constexpr int SD_CMD_PIN = 35;
-constexpr int SD_D0_PIN = 37;
-constexpr int SD_D1_PIN = 38;
-constexpr int SD_D2_PIN = 33;
-constexpr int SD_D3_PIN = 34;
+constexpr int SD_MISO_PIN = 16;
+constexpr int SD_MOSI_PIN = 18;
+constexpr int SD_SCK_PIN = 17;
+constexpr int SD_CS_PIN = 47;
+constexpr uint32_t SD_SPI_FREQUENCY = 4U * 1000U * 1000U;
 
 enum class StorageMode : uint8_t {
     USB_STORAGE,
     HTTP_TRANSFER,
     ERROR,
-};
-
-/**
- * Arduino-ESP32 2.x does not expose raw SD-MMC reads through SDMMCFS. USB MSC
- * works with sectors, so retain the card handle owned by SDMMCFS and use the
- * public ESP-IDF sector API for read-only MSC access.
- */
-class RawSdMmcFs : public fs::SDMMCFS {
-public:
-    RawSdMmcFs() : SDMMCFS(FSImplPtr(new VFSImpl())) {}
-
-    bool ready() const {
-        return _card != nullptr;
-    }
-
-    uint32_t sector_count() const {
-        return _card == nullptr ? 0 : _card->csd.capacity;
-    }
-
-    uint16_t sector_size() const {
-        return _card == nullptr ? 0 : _card->csd.sector_size;
-    }
-
-    bool read_sector(uint32_t sector, uint8_t* destination) {
-        return _card != nullptr
-            && sdmmc_read_sectors(_card, destination, sector, 1) == ESP_OK;
-    }
 };
 
 struct UploadContext {
@@ -90,7 +59,7 @@ struct UploadContext {
     }
 };
 
-RawSdMmcFs storage;
+fs::SDFS& storage = SD;
 USBMSC msc;
 AsyncWebServer server(80);
 
@@ -560,12 +529,12 @@ int32_t handle_msc_read(
 ) {
     if (!storage_ready
         || storage_mode != StorageMode::USB_STORAGE
-        || storage.sector_size() != sizeof(msc_sector_buffer)) {
+        || storage.sectorSize() != sizeof(msc_sector_buffer)) {
         return -1;
     }
 
     const uint64_t first_byte = static_cast<uint64_t>(lba) * sizeof(msc_sector_buffer) + offset;
-    const uint64_t card_bytes = static_cast<uint64_t>(storage.sector_count())
+    const uint64_t card_bytes = static_cast<uint64_t>(storage.numSectors())
         * sizeof(msc_sector_buffer);
     if (first_byte + byte_count > card_bytes) {
         return -1;
@@ -587,7 +556,7 @@ int32_t handle_msc_read(
             remaining,
             static_cast<uint32_t>(sizeof(msc_sector_buffer) - sector_offset)
         );
-        if (!storage.read_sector(sector, msc_sector_buffer)) {
+        if (!storage.readRAW(msc_sector_buffer, sector)) {
             success = false;
             break;
         }
@@ -694,23 +663,23 @@ void configure_http_routes() {
 }
 
 bool initialize_storage() {
-    if (!storage.setPins(
-            SD_CLK_PIN,
-            SD_CMD_PIN,
-            SD_D0_PIN,
-            SD_D1_PIN,
-            SD_D2_PIN,
-            SD_D3_PIN
+    pinMode(SD_CS_PIN, OUTPUT);
+    digitalWrite(SD_CS_PIN, HIGH);
+    SPI.begin(SD_SCK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN);
+
+    if (!storage.begin(
+            SD_CS_PIN,
+            SPI,
+            SD_SPI_FREQUENCY,
+            "/sdcard",
+            5,
+            false
         )) {
-        Serial.println("[SD] Failed to configure SD-MMC pins");
-        return false;
-    }
-    if (!storage.begin("/sdcard", false, false)) {
         Serial.println("[SD] Mount failed; insert a FAT32 card and reboot");
         return false;
     }
-    if (storage.sector_size() != sizeof(msc_sector_buffer)) {
-        Serial.printf("[SD] Unsupported sector size: %u\n", storage.sector_size());
+    if (storage.sectorSize() != sizeof(msc_sector_buffer)) {
+        Serial.printf("[SD] Unsupported sector size: %u\n", storage.sectorSize());
         return false;
     }
     if (!storage.exists(STORAGE_ROOT) && !storage.mkdir(STORAGE_ROOT)) {
@@ -719,9 +688,10 @@ bool initialize_storage() {
     }
     remove_partial_files();
     Serial.printf(
-        "[SD] Ready: %u sectors x %u bytes\n",
-        storage.sector_count(),
-        storage.sector_size()
+        "[SD] SPI ready at %u Hz: %u sectors x %u bytes\n",
+        SD_SPI_FREQUENCY,
+        storage.numSectors(),
+        storage.sectorSize()
     );
     return true;
 }
@@ -734,7 +704,7 @@ bool initialize_usb_storage() {
     msc.onRead(handle_msc_read);
     msc.onWrite(reject_msc_write);
     msc.mediaPresent(false);
-    if (!msc.begin(storage.sector_count(), storage.sector_size())) {
+    if (!msc.begin(storage.numSectors(), storage.sectorSize())) {
         Serial.println("[USB] Could not initialize MSC");
         return false;
     }

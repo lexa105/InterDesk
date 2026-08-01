@@ -6,8 +6,10 @@ implementation of Apple's AirDrop protocol.
 
 ## Hardware and modes
 
-- Target: ESP32-S3 / LilyGO T-Dongle-S3 configuration.
-- SD-MMC pins: CLK 36, CMD 35, D0 37, D1 38, D2 33, D3 34.
+- Target: custom ESP32-S3 board (`lilygo-t-dongle-s3` is retained as the legacy
+  PlatformIO environment name).
+- SD SPI pins: MISO 16, MOSI 18, SCK 17, CS 47.
+- SD SPI frequency: 4 MHz.
 - Mode button: GPIO 0, long press for at least 750 ms.
 - SD format: FAT32; firmware does not format the card automatically.
 
@@ -40,3 +42,38 @@ pio run -d firmware/AirdropOnly_firmware -e lilygo-t-dongle-s3
 ```
 
 Append `-t upload` to flash. Serial diagnostics use 115200 baud.
+
+## Standalone SD-card test
+
+The `sd-card-test` environment builds only `src/sd_card_test.cpp`. It uses the
+Arduino `SD` and `SPI` libraries with MISO 16, MOSI 18, SCK 17, and CS 47. It
+starts at a conservative 4 MHz, mounts the card, lists the root directory, and
+verifies write, read, and delete operations using the temporary file
+`/bkmd_sd_test.txt`.
+
+Select it in the PlatformIO environment picker, pass `-e sd-card-test` on the
+command line, or temporarily change `default_envs` at the top of
+`platformio.ini` from `lilygo-t-dongle-s3` to `sd-card-test`.
+
+Build and upload the diagnostic firmware:
+
+```sh
+pio run -e sd-card-test -t upload
+pio device monitor -b 115200
+```
+
+The diagnostic waits until a USB serial monitor connects, so its one-shot boot
+messages are not lost while the port re-enumerates after upload. If PlatformIO
+cannot select the new port automatically, find it with `pio device list` and
+pass it explicitly using `pio device monitor --port PORT -b 115200`. A working
+card ends with:
+
+```text
+RESULT: PASS - mount, write, read, and delete succeeded
+```
+
+To return to the HTTP/USB firmware, upload the normal environment:
+
+```sh
+pio run -e lilygo-t-dongle-s3 -t upload
+```
