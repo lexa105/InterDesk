@@ -1,6 +1,12 @@
 # macOS
 .DS_Store
 
+# Claude Code — personal, machine-local config
+.claude/agents/
+.claude/skills/
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+
 # Xcode
 DerivedData/
 build/
