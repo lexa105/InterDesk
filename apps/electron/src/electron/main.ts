@@ -15,6 +15,9 @@ import { MouseMonitor } from './mousemonitor.js';
 // Persisted user settings (switch keybind, forwarding toggles)
 import { settingsStore, type AppSettings } from './settings-store.js';
 
+// Swallows local keystrokes while the keyboard is forwarded to PC2
+import { localKeyBlocker } from './local-key-blocker.js';
+
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -57,6 +60,11 @@ function syncMonitors() {
     if (!wantKeyboard && keyMonitor.isRunning) keyMonitor.stop();
     if (wantMouse && !mouseMonitor.isRunning) mouseMonitor.start();
     if (!wantMouse && mouseMonitor.isRunning) mouseMonitor.stop();
+
+    // While forwarding, the keyboard belongs to PC2: swallow local keystrokes
+    // so only the switch keybind does anything on this machine.
+    if (wantKeyboard) localKeyBlocker.start(settings.switchKeybind);
+    else localKeyBlocker.stop();
 }
 
 function setMonitoring(active: boolean) {
@@ -126,11 +134,15 @@ function registerSettingsIpc() {
 
     // While the renderer is recording a new keybind, the current one is
     // suspended so pressing it gets captured instead of toggling monitors.
+    // The key blocker is suspended too, or the recorder window would never
+    // receive the keystrokes being recorded.
     ipcMain.handle('keybind:begin-capture', () => {
+        localKeyBlocker.stop();
         globalShortcut.unregister(settingsStore.get().switchKeybind);
     });
     ipcMain.handle('keybind:cancel-capture', () => {
         registerSwitchKeybind(settingsStore.get().switchKeybind);
+        syncMonitors();
     });
 
     ipcMain.handle('keybind:set', (_event, accelerator: string) => {
@@ -138,12 +150,18 @@ function registerSettingsIpc() {
             return { ok: false, error: `"${accelerator}" is not a valid shortcut.` } as const;
         }
         const previous = settingsStore.get().switchKeybind;
+        // Release blanket-registered combos so the new accelerator is free to
+        // be registered as the switch keybind; syncMonitors() re-blocks with
+        // the new exclusion afterwards.
+        localKeyBlocker.stop();
         globalShortcut.unregister(previous);
         if (registerSwitchKeybind(accelerator)) {
             const settings = settingsStore.update({ switchKeybind: accelerator });
+            syncMonitors();
             return { ok: true, settings } as const;
         }
         registerSwitchKeybind(previous);
+        syncMonitors();
         return { ok: false, error: `Could not register "${accelerator}" - it may be in use by another app.` } as const;
     });
 
@@ -193,6 +211,7 @@ app.on('ready', async () => {
 
 async function cleanup() {
     console.log('Performing app cleanup...');
+    localKeyBlocker.stop();
     keyMonitor.stop();
     mouseMonitor.stop();
     await bluetoothManager.disconnect()
