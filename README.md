@@ -9,7 +9,7 @@ InterDesk solves that with a tiny wireless USB dongle. Plug the dongle into the 
 
 That means it can work with everything from your everyday desktop to locked-down school computers, old machines, or any system where installing additional software isn’t an option.
 
-![InterDesk dongle](img/dongle_transparent.png)
+![InterDesk dongle](img/InterDongle.png)
 
 
 ## Features
