@@ -1,92 +1,94 @@
-# BKMD - Bluetooth Keyboard and Mouse Dongler/Device
 
-## What is BKMD?
+# InterDesk
+## Why?
+In a world where there's tech for almost every niche problem, there's always an even more niche problem waiting to be solved!
 
-BKMD is a custom ESP32-S3 USB dongle plus a companion desktop app that lets you control one
-computer using the keyboard (and, eventually, mouse) of another computer over Bluetooth Low
-Energy.
+I often work with my laptop and desktop side by side. The problem is that my laptop ends up sitting right in front of the desktop keyboard, so whenever I need to use the other computer, I have to awkwardly reach around it or keep moving between two sets of peripherals.
 
-The motivating scenario: you have a desktop PC and a laptop set up side by side, and the laptop
-sits in front of (or on top of) the desktop's keyboard, leaving little to no room to use it.
-Instead of physically reaching around your laptop to use the desktop's keyboard, BKMD lets you
-just type on the laptop and forwards those keystrokes wirelessly to the desktop.
+InterDesk solves that with a tiny wireless USB dongle. Plug the dongle into the computer you want to control and run the companion app on your laptop. Your laptop’s keyboard and touchpad inputs are sent wirelessly over Bluetooth to the dongle, which forwards them as standard USB HID input — meaning no software is required on the controlled device.
 
-**How it works, end to end:**
-1. The BKMD dongle plugs via USB-A into the PC you want to *control* (the "target"). To that PC,
-   it enumerates as a normal USB keyboard/mouse (USB HID device).
-2. The desktop app runs on the machine you want to *control from* (e.g. your laptop) and hooks
-   your keyboard globally, using the [`uiohook-napi`](https://github.com/SnosMe/uiohook-napi)
-   library (native bindings around `libuiohook`) for OS-level, cross-platform global key capture.
-3. Captured keystrokes are converted into standard USB HID reports and sent to the dongle over
-   BLE.
-4. The dongle replays those reports over USB HID into the target PC — so from the target PC's
-   point of view, it's just a keyboard being typed on.
-5. A global shortcut in the app toggles capture on/off, so you can switch which machine your
-   keyboard is currently "aimed at" without unplugging anything.
+That means it can work with everything from your everyday desktop to locked-down school computers, old machines, or any system where installing additional software isn’t an option.
 
-### Repository layout
+![InterDesk dongle](img/dongle_transparent.png)
 
-- `apps/electron/` — the actively developed cross-platform desktop app (Electron + React +
-  TypeScript). This is where current development happens.
-- `apps/macOS/` — the original native Swift/SwiftUI prototype from the first development phase.
-  Frozen/kept for reference; not under active development.
-- `firmware/BKMD_firmware/` — the active ESP32-S3 firmware (PlatformIO, Arduino framework,
-  NimBLE) that runs on the dongle itself.
-- `docs/` — reserved for future protocol/architecture documentation. See
-  [`docs/getting-started.md`](docs/getting-started.md) for how to install and run the desktop
-  app.
 
-Key libraries used in `apps/electron`:
-- [`uiohook-napi`](https://github.com/SnosMe/uiohook-napi) — global keyboard and mouse hook used
-  to capture input on the controlling machine.
-- [`@stoprocent/noble`](https://github.com/stoprocent/noble) — BLE central-role library used to
-  scan for, connect to, and write HID reports to the dongle.
+## Features
+- Free desktop switching
+- Use your laptop's touchpad and keyboard
+- **Wireless** control over Bluetooth
+- Powered by an esp32s3 == **<5€ solution**
+- **No installation on controlled device**
+- Keyboard shortcuts for fast switching
 
-See `CLAUDE.md` at the repo root for a more detailed technical breakdown (BLE protocol/UUIDs,
-build commands, current implementation status and known gaps) intended for contributors and AI
-coding assistants working in this codebase.
 
-### Project status (2026-07)
 
-Currently working: selecting and connecting to a BLE dongle, toggling global input capture, and
-forwarding keyboard and mouse reports to the firmware for replay as USB HID input on the target
-PC.
 
-## SOFTWARE Desktop App
-As the first development phase in 2025 occurred in Swift to create a demo prototype and verify project's core functionality and feasibility (DONE: With some errors, but the main function worked in Q4 2025)
 
-We decided to shift from native development to cross-platform development in Electron or similar framework. Main motivations behind this move is to:
-* **Maintain Uniformity:** Develop for Windows, macOS, and Linux using a single codebase.
-* **Increase Flexibility:** Focus on rapid feature deployment and lower development costs.
-* **Optimize for Workflow:** The primary use case is `Desktop PC + BKMD <-> BKMD-config-app + Laptop`.
+## How does it work?
 
-Sacrificing some native optimization for flexibility, cost and uniformity of development.
+1. Plug the InterDesk dongle into the computer you want to control.
+2. Open the InterDesk app on your laptop and connect to the dongle over Bluetooth.
+3. Set up or use the activation shortcut to switch input forwarding on and off.
+4. When active, the app captures your keyboard and mouse input and converts it into standard HID reports.
+5. These reports are sent over Bluetooth to the dongle.
+6. The esp32s3 sends the reports directly to the controlled computer over USB.
 
-We expect major updates and upgrades, to early final product to be made in 2026. 
+The controlled computer sees the dongle as a normal USB keyboard and mouse. No InterDesk software or drivers are needed on it.
 
-## HARDWARE
+![InterDesk connection](img/graph.png)
 
-The dongle firmware (`firmware/BKMD_firmware`) is built with PlatformIO on the Arduino framework
-and targets two board configurations:
+## Dongle
 
-* **`lilygo-t-dongle-s3`** — the actual target hardware: a LilyGO T-Dongle S3 with a male USB-A
-  connector (so it plugs directly into the target PC) and a small onboard TFT display used to
-  show connection/debug state.
-* **`esp32-s3-devkitc-1`** — a generic ESP32-S3 dev board used for development/testing without a
-  display.
+InterDesk is built around the ESP32-S3 as it gives all we need in small and cheap MCU.
 
-The firmware advertises itself over BLE (NimBLE) as a GATT server with one write-only data
-characteristic for keyboard and mouse HID reports. A hardware button controls the experimental
-"AirDrop" advertising mode locally. On the USB side it enumerates as a native HID keyboard/mouse
-via the ESP32-S3's USB peripheral, so the target PC needs no special drivers.
+- **Bluetooth Low Energy** to communicate wirelessly with the laptop.
+- **Native USB**  so it can act as a USB HID keyboard and mouse.
 
-## WORK IN PROGRESS
+Our main hardware is **[this dongle](https://www.aliexpress.com/item/1005009024098181.html?spm=a2g0o.detail.0.0.7031xi6bxi6b8k&productId=1005009024098181&pdp_ext_f=%7B%22tabScene%22%3A%22retail%22%2C%22sku_id%22%3A12000047619166787%2C%22origProductId%22%3A%221005009024098181%22%7D#nav-description)** with male USB-A connector for **less then 10euro**. Firmware can also run on other cheaper boards, such as an **ESP32-S3 Zero**, but you need cable. Unfortunatelly we didnt find widely available board with usbc male connector
+## App
 
-Our goal is to create universal USB dongle that would allow you to control different PC over WPAN.
-We use ESP32S3 as it offers HID and BLE peripherals. 
+The InterDesk desktop app is built with **Electron, React and TypeScript** so the same app can run on macOS, Windows and Linux.
 
-https://www.aliexpress.com/item/1005009024098181.html?spm=a2g0o.detail.0.0.7031xi6bxi6b8k&productId=1005009024098181&pdp_ext_f=%7B%22tabScene%22%3A%22retail%22%2C%22sku_id%22%3A12000047619166787%2C%22origProductId%22%3A%221005009024098181%22%7D&#nav-description
+The app uses:
 
-## Notes
+* **`uiohook-napi`** to capture global keyboard and mouse input.
+* **`@stoprocent/noble`** to scan for the InterDesk dongle, connect over Bluetooth Low Energy and send HID reports.
+* **React + Tailwind CSS** for the user interface.
 
-Dont forget to change UserSetup.h after you download TFTeSPI library. 
+When input forwarding is active, the app captures keyboard and mouse events, converts them into HID reports and sends them to the dongle over BLE.
+
+![InterDesk demo](img/donge.gif)
+
+### Run the app
+
+```bash
+cd apps/electron
+npm install
+npm run dev
+```
+
+This starts the React/Vite interface together with Electron in development mode.
+
+### Build
+
+```bash
+npm run build
+```
+
+Platform-specific packages can also be created with:
+
+```bash
+npm run dist:mac
+npm run dist:win
+npm run dist:linux
+```
+
+## Goals
+We have many more ideas we want to implement if the project proves useful to others. For example:
+
+- Add a wireless flash drive mode for fast file transfer
+- Make switching between computers easier
+- Improve speed and latency
+- Design a custom PCB with both USB-A and USB-C connectors and a faster esp32s31
+
+This is our first larger project, so we welcome any suggestions or recommendations for improvement.
