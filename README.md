@@ -45,6 +45,10 @@ InterDesk is built around the ESP32-S3 as it gives all we need in small and chea
 - **Native USB**  so it can act as a USB HID keyboard and mouse.
 
 Our main hardware is **[this dongle](https://www.aliexpress.com/item/1005009024098181.html?spm=a2g0o.detail.0.0.7031xi6bxi6b8k&productId=1005009024098181&pdp_ext_f=%7B%22tabScene%22%3A%22retail%22%2C%22sku_id%22%3A12000047619166787%2C%22origProductId%22%3A%221005009024098181%22%7D#nav-description)** with male USB-A connector for **less then 10euro**. Firmware can also run on other cheaper boards, such as an **ESP32-S3 Zero**, but you need cable. Unfortunatelly we didnt find widely available board with usbc male connector
+
+Firmware for esp32s3 is flashed using platformio. TODO - user_setup.h fix for dongle plaformio target.
+
+
 ## App
 
 The InterDesk desktop app is built with **Electron, React and TypeScript** so the same app can run on macOS, Windows and Linux.
