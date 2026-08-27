@@ -7,7 +7,13 @@
 
 constexpr size_t BLE_MAX_PAYLOAD = 128;
 
+enum class BlePacketType : uint8_t {
+  HidReport,
+  Disconnected,
+};
+
 struct BlePacket {
+  BlePacketType type;
   uint16_t len;
   uint8_t  data[BLE_MAX_PAYLOAD];
 };
@@ -29,7 +35,7 @@ public:
   void soft_stop(bool disconnectClient /* = true */);
   void resume();
   void setConnected(uint16_t connHandle) { _connected = true; _connHandle = connHandle; }
-  void setDisconnected() { _connected = false; _connHandle = 0xFFFF; }
+  void handleDisconnected();
   bool advEnabled() const { return _advEnabled; }
 
 private:
@@ -45,5 +51,6 @@ private:
   uint16_t _connHandle = 0xFFFF;
   NimBLEAdvertising* _adv = nullptr;
   bool _advEnabled = true;   // when false, onDisconnect must NOT restart advertising
+  QueueHandle_t _rxQueue;
 
 };

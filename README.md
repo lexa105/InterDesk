@@ -94,5 +94,7 @@ We have many more ideas we want to implement if the project proves useful to oth
 - Make switching between computers easier
 - Improve speed and latency
 - Design a custom PCB with both USB-A and USB-C connectors and a faster esp32s31
+- Clipboard transfer to connected device
+
 
 This is our first larger project, so we welcome any suggestions or recommendations for improvement.

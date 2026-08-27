@@ -40,8 +40,11 @@ USBHIDKeyboard keyboard;
 USBHIDMouse mouse;
 
 bool hid_decode(const BlePacket& pkt);
+static void hid_release_all();
 static void ui_set_debug(const char* s);
 static void ui_toggle_airdrop();
+
+static uint8_t hidMouseButtons = 0;
 
 
 void setup() {
@@ -106,7 +109,9 @@ void DecoderTask(void*) {
   static uint32_t last = 0;
   for (;;) {
     if (xQueueReceive(bleRxQ, &pkt, portMAX_DELAY) == pdTRUE) {
-      if (!hid_decode(pkt)) {
+      if (pkt.type == BlePacketType::Disconnected) {
+        hid_release_all();
+      } else if (!hid_decode(pkt)) {
         ui_set_debug("HID BAD");
       }
     }
@@ -206,17 +211,16 @@ bool hid_decode(const BlePacket& pkt){
   // Sent by MouseMonitor on the Electron side. Buttons bitmask matches USBHIDMouse's
   // MOUSE_LEFT/MOUSE_RIGHT/MOUSE_MIDDLE, so it can be passed straight to press()/release().
   if (pkt.len == 4) {
-    static uint8_t last_buttons = 0;
-    uint8_t buttons = pkt.data[0];
+    uint8_t buttons = pkt.data[0] & MOUSE_ALL;
     int8_t dx = static_cast<int8_t>(pkt.data[1]);
     int8_t dy = static_cast<int8_t>(pkt.data[2]);
     int8_t wheel = static_cast<int8_t>(pkt.data[3]);
 
-    uint8_t pressed = buttons & ~last_buttons;
-    uint8_t released = ~buttons & last_buttons;
+    uint8_t pressed = buttons & ~hidMouseButtons;
+    uint8_t released = ~buttons & hidMouseButtons;
     if (pressed) mouse.press(pressed);
     if (released) mouse.release(released);
-    last_buttons = buttons;
+    hidMouseButtons = buttons;
 
     if (dx != 0 || dy != 0 || wheel != 0) {
       mouse.move(dx, dy, wheel);
@@ -225,6 +229,13 @@ bool hid_decode(const BlePacket& pkt){
   }
 
   return false;
+}
+
+static void hid_release_all() {
+  keyboard.releaseAll();
+  mouse.release(MOUSE_ALL);
+  hidMouseButtons = 0;
+  Serial.println("USB HID state cleared after BLE disconnect");
 }
 
 static void ui_set_debug(const char* s) {

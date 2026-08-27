@@ -4,8 +4,23 @@
 
 BleServer::BleServer(QueueHandle_t rxQueue)
 : _serverCallbacks(*this)
-, _dataCallbacks(rxQueue)   
+, _dataCallbacks(rxQueue)
+, _rxQueue(rxQueue)
 {}
+
+void BleServer::handleDisconnected() {
+  _connected = false;
+  _connHandle = 0xFFFF;
+
+  // Reports queued before the link went down belong to the old BLE session.
+  // Drop them, then make the decoder release every USB HID control locally.
+  xQueueReset(_rxQueue);
+  BlePacket event{};
+  event.type = BlePacketType::Disconnected;
+  if (xQueueSend(_rxQueue, &event, 0) != pdTRUE) {
+    Serial.println("Failed to queue HID disconnect cleanup");
+  }
+}
 
 void BleServer::start() {
 

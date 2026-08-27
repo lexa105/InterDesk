@@ -25,7 +25,7 @@ void ServerCallbacks::onConnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo)
 
 void ServerCallbacks::onDisconnect(NimBLEServer*, NimBLEConnInfo&, int) {
     Serial.println("Client disconnected");
-    _owner.setDisconnected();
+    _owner.handleDisconnected();
 
     if (_owner.advEnabled()) {
         NimBLEDevice::startAdvertising();
@@ -45,9 +45,12 @@ void CharacteristicDataCallbacks::onWrite(
     const std::string value = characteristic->getValue();
     if (value.empty()) return;
 
-    BlePacket packet;
+    BlePacket packet{};
+    packet.type = BlePacketType::HidReport;
     packet.len = static_cast<uint16_t>(std::min(value.size(), BLE_MAX_PAYLOAD));
     memcpy(packet.data, value.data(), packet.len);
 
-    (void)xQueueSend(_q, &packet, 0);
+    if (xQueueSend(_q, &packet, 0) != pdTRUE) {
+        Serial.println("BLE HID queue full; report dropped");
+    }
 }
