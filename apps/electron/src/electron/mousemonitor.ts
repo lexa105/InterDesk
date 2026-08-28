@@ -1,5 +1,6 @@
 import { uIOhook } from "uiohook-napi";
 import { EventEmitter } from 'node:events';
+import { acquireUiohook, releaseUiohook } from './uiohook-lifecycle.js';
 
 // Bitmask matches a standard USB HID mouse boot report, byte 0.
 const BUTTON_LEFT = 0x01;
@@ -59,10 +60,9 @@ export class MouseMonitor extends EventEmitter {
         });
     }
 
-    // Note: does not start/stop the shared uIOhook instance itself — KeyMonitor owns
-    // that lifecycle. Callers are expected to toggle both monitors together.
     public start() {
         if (this._isRunning) return;
+        acquireUiohook();
         this.lastX = null;
         this.lastY = null;
         this._isRunning = true;
@@ -71,6 +71,7 @@ export class MouseMonitor extends EventEmitter {
     public stop() {
         if (!this._isRunning) return;
         this._isRunning = false;
+        releaseUiohook();
         this.pressedButtons = 0x00;
         this.lastX = null;
         this.lastY = null;

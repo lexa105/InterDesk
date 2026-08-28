@@ -115,6 +115,12 @@ function registerBluetoothIpc() {
         mainWindow?.webContents.send('bluetooth:scan-state-changed', scanning);
     });
     bluetoothManager.on('connectionStateChanged', (state: ConnectionState, device: BluetoothDevice | null) => {
+        // Without a connected dongle, forwarded input goes nowhere while the
+        // key blocker still swallows local keystrokes - the keyboard would be
+        // dead on both machines. Hand control back to the local machine.
+        if (state === 'disconnected' && monitoringActive) {
+            setMonitoring(false);
+        }
         mainWindow?.webContents.send('bluetooth:connection-state-changed', state, device);
     });
 }

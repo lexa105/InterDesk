@@ -1,5 +1,6 @@
 import { uIOhook, UiohookKey } from "uiohook-napi";
 import { EventEmitter } from 'node:events';
+import { acquireUiohook, releaseUiohook } from './uiohook-lifecycle.js';
 
 const MAC_HID_MAP: Record<number, number> = {
     // Letters
@@ -104,14 +105,15 @@ export class KeyMonitor extends EventEmitter {
 
     public start() {
         if (this._isRunning) return;
-        uIOhook.start();
+        acquireUiohook();
         this._isRunning = true; // Update state here
     }
 
     public stop() {
+        if (!this._isRunning) return;
         console.log("Stopping KeyMonitor");
         this._isRunning = false;
-        uIOhook.stop()
+        releaseUiohook();
 
         //Reset our state so we dont have "stuck" ?
         this.currentModifiers = 0x00;
@@ -125,6 +127,10 @@ export class KeyMonitor extends EventEmitter {
     
 
     private handleKeyEvent(uiHookKeycode: number, isDown: boolean) {
+        // The shared hook may be running for MouseMonitor alone - ignore key
+        // events unless keyboard forwarding itself is on.
+        if (!this._isRunning) return;
+
         let changed = false;
 
         if(this.isModifier(uiHookKeycode)) {
