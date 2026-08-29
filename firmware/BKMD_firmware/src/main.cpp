@@ -13,6 +13,7 @@
 #include "USB.h"
 #include "USBHIDMouse.h"
 #include "USBHIDKeyboard.h"
+#include "usb/abs_mouse.h"
 
 static QueueHandle_t bleRxQ;
 static BleServer* ble = nullptr;
@@ -38,6 +39,7 @@ enum : EventBits_t {
 
 USBHIDKeyboard keyboard;
 USBHIDMouse mouse;
+USBHIDAbsMouse absMouse;
 
 bool hid_decode(const BlePacket& pkt);
 static void hid_release_all();
@@ -61,6 +63,7 @@ void setup() {
 
   keyboard.begin();
   mouse.begin();
+  absMouse.begin();
   USB.begin();
 
   //start decoder task
@@ -228,6 +231,23 @@ bool hid_decode(const BlePacket& pkt){
     return true;
   }
 
+  // 6-byte absolute mouse report:
+  //   [0]    buttons bitmask (bit0 left, bit1 right, bit2 middle)
+  //   [1..2] x, uint16 little-endian, 0..32767
+  //   [3..4] y, uint16 little-endian, 0..32767
+  //   [5]    wheel (int8, relative)
+  // Position is in the DeskHop-style virtual 0..32767 space; the host maps it to
+  // the full screen. Clamping happens in USBHIDAbsMouse::sendReport().
+  if (pkt.len == 6) {
+    uint8_t buttons = pkt.data[0] & ABS_MOUSE_ALL;
+    uint16_t x = static_cast<uint16_t>(pkt.data[1]) | (static_cast<uint16_t>(pkt.data[2]) << 8);
+    uint16_t y = static_cast<uint16_t>(pkt.data[3]) | (static_cast<uint16_t>(pkt.data[4]) << 8);
+    int8_t wheel = static_cast<int8_t>(pkt.data[5]);
+
+    absMouse.sendReport(buttons, x, y, wheel);
+    return true;
+  }
+
   return false;
 }
 
@@ -235,6 +255,7 @@ static void hid_release_all() {
   keyboard.releaseAll();
   mouse.release(MOUSE_ALL);
   hidMouseButtons = 0;
+  absMouse.releaseAll();
   Serial.println("USB HID state cleared after BLE disconnect");
 }
 
