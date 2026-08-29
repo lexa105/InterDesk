@@ -14,10 +14,21 @@ export interface BluetoothDevice {
 
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected';
 
+export type Pc2Side = 'left' | 'right' | 'top' | 'bottom';
+
+export interface Pc2Layout {
+    side: Pc2Side;
+    offset: number;
+    scale: number;
+}
+
 export interface AppSettings {
     switchKeybind: string;
     forwardKeyboard: boolean;
     forwardMouse: boolean;
+    dynamicSwitch: boolean;
+    pc2Layout: Pc2Layout;
+    mouseMode: 'absolute' | 'relative';
 }
 
 function subscribe<T extends unknown[]>(channel: string, callback: (...args: T) => void) {
@@ -40,6 +51,8 @@ const bkmdApi = {
     getSettings: (): Promise<AppSettings> => ipcRenderer.invoke('settings:get'),
     setForwarding: (patch: { forwardKeyboard?: boolean; forwardMouse?: boolean }): Promise<AppSettings> =>
         ipcRenderer.invoke('settings:set-forwarding', patch),
+    setSwitching: (patch: Partial<Pick<AppSettings, 'dynamicSwitch' | 'mouseMode' | 'pc2Layout'>>): Promise<AppSettings> =>
+        ipcRenderer.invoke('settings:set-switching', patch),
     beginKeybindCapture: (): Promise<void> => ipcRenderer.invoke('keybind:begin-capture'),
     cancelKeybindCapture: (): Promise<void> => ipcRenderer.invoke('keybind:cancel-capture'),
     setKeybind: (accelerator: string): Promise<{ ok: true; settings: AppSettings } | { ok: false; error: string }> =>

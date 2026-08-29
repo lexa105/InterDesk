@@ -13,10 +13,13 @@ import { KeyMonitor } from './keymonitor.js';
 import { MouseMonitor } from './mousemonitor.js';
 
 // Persisted user settings (switch keybind, forwarding toggles)
-import { settingsStore, type AppSettings } from './settings-store.js';
+import { settingsStore, type AppSettings, type Pc2Layout, type Pc2Side } from './settings-store.js';
 
 // Swallows local keystrokes while the keyboard is forwarded to PC2
 import { localKeyBlocker } from './local-key-blocker.js';
+
+// Detects the cursor being thrown at the screen edge facing PC2
+import { edgeSwitcher, type EdgeCrossing } from './edge-switcher.js';
 
 
 const __filename = fileURLToPath(import.meta.url);
@@ -51,6 +54,22 @@ async function createWindow() {
 }
 
 
+const SIDES: Pc2Side[] = ['left', 'right', 'top', 'bottom'];
+
+function clamp(value: number, min: number, max: number): number {
+    return Math.max(min, Math.min(max, value));
+}
+
+/** The edge of PC2's screen that faces back towards PC1. */
+function oppositeEdge(side: Pc2Side): Pc2Side {
+    switch (side) {
+        case 'left': return 'right';
+        case 'right': return 'left';
+        case 'top': return 'bottom';
+        case 'bottom': return 'top';
+    }
+}
+
 function syncMonitors() {
     const settings = settingsStore.get();
     const wantKeyboard = monitoringActive && settings.forwardKeyboard;
@@ -58,13 +77,25 @@ function syncMonitors() {
 
     if (wantKeyboard && !keyMonitor.isRunning) keyMonitor.start();
     if (!wantKeyboard && keyMonitor.isRunning) keyMonitor.stop();
-    if (wantMouse && !mouseMonitor.isRunning) mouseMonitor.start();
+    if (wantMouse && !mouseMonitor.isRunning) {
+        // If PC2 is on the right, the way back to PC1 is PC2's left edge.
+        mouseMonitor.start(settings.mouseMode, oppositeEdge(settings.pc2Layout.side));
+    }
     if (!wantMouse && mouseMonitor.isRunning) mouseMonitor.stop();
 
     // While forwarding, the keyboard belongs to PC2: swallow local keystrokes
     // so only the switch keybind does anything on this machine.
     if (wantKeyboard) localKeyBlocker.start(settings.switchKeybind);
     else localKeyBlocker.stop();
+
+    // The edge watcher only makes sense in LOCAL mode, and only if throwing the
+    // cursor at the border could actually reach a dongle.
+    edgeSwitcher.setEnabled(
+        settings.dynamicSwitch &&
+        !monitoringActive &&
+        settings.forwardMouse &&
+        bluetoothManager.getConnectionState() === 'connected'
+    );
 }
 
 function setMonitoring(active: boolean) {
@@ -120,6 +151,9 @@ function registerBluetoothIpc() {
         // dead on both machines. Hand control back to the local machine.
         if (state === 'disconnected' && monitoringActive) {
             setMonitoring(false);
+        } else {
+            // Arm/disarm the edge watcher with the connection.
+            syncMonitors();
         }
         mainWindow?.webContents.send('bluetooth:connection-state-changed', state, device);
     });
@@ -133,6 +167,25 @@ function registerSettingsIpc() {
         const sanitized: Partial<AppSettings> = {};
         if (typeof patch?.forwardKeyboard === 'boolean') sanitized.forwardKeyboard = patch.forwardKeyboard;
         if (typeof patch?.forwardMouse === 'boolean') sanitized.forwardMouse = patch.forwardMouse;
+        const settings = settingsStore.update(sanitized);
+        syncMonitors();
+        return settings;
+    });
+
+    ipcMain.handle('settings:set-switching', (_event, patch: Partial<Pick<AppSettings, 'dynamicSwitch' | 'pc2Layout' | 'mouseMode'>>) => {
+        const sanitized: Partial<AppSettings> = {};
+        if (typeof patch?.dynamicSwitch === 'boolean') sanitized.dynamicSwitch = patch.dynamicSwitch;
+        // Rebuilt field by field - never trust the renderer's object shape.
+        const layout = patch?.pc2Layout as Partial<Pc2Layout> | undefined;
+        if (layout && SIDES.includes(layout.side as Pc2Side) &&
+            Number.isFinite(layout.offset) && Number.isFinite(layout.scale)) {
+            sanitized.pc2Layout = {
+                side: layout.side as Pc2Side,
+                offset: clamp(layout.offset as number, -10, 10),
+                scale: clamp(layout.scale as number, 0.05, 20),
+            };
+        }
+        if (patch?.mouseMode === 'absolute' || patch?.mouseMode === 'relative') sanitized.mouseMode = patch.mouseMode;
         const settings = settingsStore.update(sanitized);
         syncMonitors();
         return settings;
@@ -210,6 +263,18 @@ app.on('ready', async () => {
     mouseMonitor.on('hid-report', async (report: Buffer) => {
         await bluetoothManager.sendHidReport(report, true);
     })
+
+    // Cursor thrown at the edge facing PC2 - seed the virtual cursor where it
+    // enters PC2's screen, then hand input over.
+    edgeSwitcher.on('crossed', (crossing: EdgeCrossing) => {
+        mouseMonitor.seedPosition(crossing.vx, crossing.vy, crossing.display, crossing.returnEdge);
+        setMonitoring(true);
+    })
+
+    // Virtual cursor pushed back out through the edge facing PC1.
+    mouseMonitor.on('edge-return', () => {
+        setMonitoring(false);
+    })
 })
 
 
@@ -218,6 +283,7 @@ app.on('ready', async () => {
 async function cleanup() {
     console.log('Performing app cleanup...');
     localKeyBlocker.stop();
+    edgeSwitcher.setEnabled(false);
     keyMonitor.stop();
     mouseMonitor.stop();
     await bluetoothManager.disconnect()
