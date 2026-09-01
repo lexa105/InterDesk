@@ -48,7 +48,7 @@ apps/
 firmware/
   BKMD_firmware/        Active ESP32-S3 firmware (PlatformIO + Arduino framework + NimBLE)
   platformio/            Local scratch PlatformIO scaffold, gitignored, not part of the build
-docs/           Currently empty — intended home for future protocol/architecture docs
+docs/           Project docs; docs/reference/deskhop/ holds the DeskHop analysis (see below)
 python-scripts/, protocol/   Out of scope / not actively maintained — ignore unless asked
 ```
 
@@ -56,18 +56,29 @@ Ownership split: application (Electron/macOS) is developed by the primary mainta
 (lexatuan@gmail.com); firmware is developed by hardware collaborator **@Dubleriino**. Firmware
 source comments are frequently written in Czech.
 
-## Current implementation status (as of 2026-07)
+## Current implementation status (as of 2026-08)
 
 Working:
 - Electron app: device discovery and connection UI, global shortcut start/stop of keyboard and
   mouse capture, and forwarding HID reports over BLE to a dongle.
-- Firmware: receiving 8-byte keyboard and 4-byte mouse reports over BLE and replaying them as USB
-  HID; "AirDrop" advertising toggle via long button press; optional TFT status display on the
-  LilyGO board variant.
+- DeskHop-style **dynamic switching** (implemented 2026-08; hardware-verified 2026-08-30 — PC2
+  accepts the absolute HID descriptor and the cursor tracks PC1 motion 1:1): a virtual
+  cursor in 0..32767 space (`mousemonitor.ts` absolute mode), edge-crossing detection on PC1
+  (`edge-switcher.ts`), and an absolute-pointer USB HID device on the dongle
+  (`firmware/BKMD_firmware/src/usb/abs_mouse.*`). Settings: `dynamicSwitch`, `pc2Side`,
+  `mouseMode` ('absolute'|'relative'). The global shortcut remains as manual switching.
+- Firmware: receiving 8-byte keyboard, 4-byte relative-mouse, and 6-byte absolute-mouse reports
+  over BLE and replaying them as USB HID; "AirDrop" advertising toggle via long button press;
+  optional TFT status display on the LilyGO board variant.
 
 Not yet working / explicitly TODO in code:
-- Per-user keybind configuration for switching between devices — only the single hardcoded
-  global shortcut exists today.
+- **Local cursor suppression while forwarding**: uiohook only observes the cursor, so while
+  forwarding the local macOS cursor pins at the physical screen edge and coordinate-derived
+  deltas collapse to zero there (limits movement away from the entry edge on PC2). Planned fix:
+  a pointer-capture overlay window feeding `MouseMonitor.applyDelta()` (already isolated for it).
+- Screen-position calibration UI exists (`src/ui/components/SwitchingPage.tsx` — drag-to-arrange
+  canvas writing `pc2Layout: { side, offset, scale }` via `settings:set-switching`), but the whole
+  dynamic-switch pipeline is untested on real hardware.
 - `apps/macOS` is frozen; do not add new features there — port relevant logic to
   `apps/electron` instead.
 
@@ -80,6 +91,9 @@ Defined in `firmware/BKMD_firmware/src/ble/ble_server.h`.
   - 8-byte payload → standard USB HID boot-keyboard report (`report[0]` = modifier bitmask,
     `report[2..7]` = up to 6 pressed HID usage codes)
   - 4-byte payload → relative mouse report (`buttons`, `dx`, `dy`, `wheel`)
+  - 6-byte payload → absolute mouse report (`buttons` u8, `x` u16-LE, `y` u16-LE, `wheel` i8;
+    x/y in the DeskHop-style 0..32767 virtual space, replayed via the dongle's absolute-pointer
+    HID device so the host OS maps it to the full screen)
 
 The firmware decodes the data channel through a FreeRTOS queue (`BlePacket`) consumed by
 `DecoderTask` in `main.cpp`.
@@ -103,7 +117,8 @@ Key files:
   `BluetoothManager`
 - `src/electron/keymonitor.ts` — global key capture + HID report construction
 - `src/electron/bluetooth-manager.ts` — BLE central role (scan/connect/write) via `noble`
-- `src/ui/` — React/Tailwind renderer (currently a non-functional mockup)
+- `src/ui/` — React/Tailwind renderer (functional: device list, dongle settings, keybind
+  recorder, switching/arrangement page — all wired over the `window.bkmd` preload bridge)
 
 ### Firmware (`firmware/BKMD_firmware`)
 
@@ -120,6 +135,26 @@ pio device monitor -b 115200               # serial log
 
 Note: the `lilygo-t-dongle-s3` env requires `TFT_eSPI`'s `User_Setup.h` to be configured after
 first library download (see root README "Notes" section).
+
+## Reference material: DeskHop analysis
+
+`docs/reference/deskhop/` contains a deep-dive analysis of the DeskHop firmware
+(https://github.com/hrvach/deskhop), an open-source hardware KVM whose mouse model BKMD is
+adopting. It is the design blueprint for replacing today's relative-delta mouse forwarding with
+an **absolute-coordinate model**: a virtual cursor in a fixed 0..32767 space, edge-crossing
+detection to switch machines, and the dongle enumerating as an absolute HID pointer to PC2.
+
+- `porting-guide.md` — **start here**: DeskHop concept → BKMD equivalent, the exact coordinate
+  math, the proposed 6-byte absolute-mouse BLE payload, the Electron-side state machine, and
+  which ~80% of DeskHop to ignore.
+- `critical-path.md` — one mouse movement traced end to end through DeskHop (the model itself).
+- `ARCHITECTURE.md` — DeskHop's overall mental model and traps.
+- `modules.md`, `history.md` — module map and git archaeology (the OS-workaround lessons).
+
+Consult `porting-guide.md` before changing mouse capture, switching logic, or the mouse wire
+format. File:line citations in these docs refer to the DeskHop repo
+(`~/Developer/deskhop`), not this one. The maintainer's background: React/TS below intermediate,
+no C experience — explain C/firmware concepts as they come up.
 
 ## Conventions & gotchas
 

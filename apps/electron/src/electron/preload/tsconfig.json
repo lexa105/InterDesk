@@ -6,9 +6,11 @@
     // CommonJS - it cannot parse ESM import/export syntax like the rest
     // of this ("type": "module") package.
     "module": "CommonJS",
+    // overlay.ts drives the DOM of the capture overlay window.
+    "lib": ["ES2020", "DOM"],
     "rootDir": ".",
     "outDir": "../../../dist-electron/preload",
     "skipLibCheck": true
   },
-  "include": ["index.ts"]
+  "include": ["index.ts", "overlay.ts"]
 }

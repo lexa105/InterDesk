@@ -1,6 +1,6 @@
 import type { BluetoothDevice } from '../electron-api'
 
-export type View = 'devices' | 'dongle'
+export type View = 'devices' | 'dongle' | 'switching'
 
 function BluetoothIcon({ className }: { className?: string }) {
   return (
@@ -16,6 +16,16 @@ function DongleIcon({ className }: { className?: string }) {
       <rect x="8" y="2" width="8" height="7" rx="1" />
       <rect x="6" y="9" width="12" height="13" rx="2" />
       <path d="M10.5 4.5h.01M13.5 4.5h.01" />
+    </svg>
+  )
+}
+
+function SwitchingIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <rect x="2" y="5" width="11" height="8" rx="1.5" />
+      <rect x="15" y="9" width="7" height="6" rx="1.5" />
+      <path d="M7.5 13v4m-2 0h4" />
     </svg>
   )
 }
@@ -76,6 +86,13 @@ export function Sidebar({ view, onSelect, connectedDevice, monitoring, available
           onClick={() => onSelect('devices')}
           icon={<BluetoothIcon className="size-4" />}
           label="Devices"
+        />
+
+        <NavItem
+          selected={view === 'switching'}
+          onClick={() => onSelect('switching')}
+          icon={<SwitchingIcon className="size-4" />}
+          label="Switching"
         />
 
         {connectedDevice && (

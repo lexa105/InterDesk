@@ -7,10 +7,21 @@ export interface BluetoothDevice {
 
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected';
 
+export type Pc2Side = 'left' | 'right' | 'top' | 'bottom';
+
+export interface Pc2Layout {
+    side: Pc2Side;
+    offset: number;
+    scale: number;
+}
+
 export interface AppSettings {
     switchKeybind: string;
     forwardKeyboard: boolean;
     forwardMouse: boolean;
+    dynamicSwitch: boolean;
+    pc2Layout: Pc2Layout;
+    mouseMode: 'absolute' | 'relative';
 }
 
 export interface BkmdApi {
@@ -25,6 +36,7 @@ export interface BkmdApi {
 
     getSettings(): Promise<AppSettings>;
     setForwarding(patch: { forwardKeyboard?: boolean; forwardMouse?: boolean }): Promise<AppSettings>;
+    setSwitching(patch: Partial<Pick<AppSettings, 'dynamicSwitch' | 'mouseMode' | 'pc2Layout'>>): Promise<AppSettings>;
     beginKeybindCapture(): Promise<void>;
     cancelKeybindCapture(): Promise<void>;
     setKeybind(accelerator: string): Promise<{ ok: true; settings: AppSettings } | { ok: false; error: string }>;

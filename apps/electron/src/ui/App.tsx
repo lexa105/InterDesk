@@ -3,6 +3,7 @@ import type { AppSettings, BluetoothDevice, ConnectionState } from './electron-a
 import { DevicesPage } from './components/DevicesPage'
 import { DongleSettingsPage } from './components/DongleSettingsPage'
 import { Sidebar, type View } from './components/Sidebar'
+import { SwitchingPage } from './components/SwitchingPage'
 
 function App() {
   const [view, setView] = useState<View>('devices')
@@ -66,10 +67,11 @@ function App() {
   }, [])
 
   // The dongle page only exists while connected - fall back to Devices
-  // when the connection goes away.
+  // when the connection goes away. Switching is a local setting, so it stays
+  // reachable with no dongle attached.
   useEffect(() => {
     if (connectionState !== 'connected') {
-      setView('devices')
+      setView((prev) => (prev === 'switching' ? prev : 'devices'))
     }
   }, [connectionState])
 
@@ -109,7 +111,9 @@ function App() {
       />
 
       <main className="flex-1 overflow-y-auto">
-        {view === 'dongle' && connectedDevice && settings ? (
+        {view === 'switching' && settings ? (
+          <SwitchingPage settings={settings} onSettingsChange={setSettings} />
+        ) : view === 'dongle' && connectedDevice && settings ? (
           <DongleSettingsPage
             device={connectedDevice}
             settings={settings}
