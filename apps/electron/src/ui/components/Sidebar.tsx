@@ -76,7 +76,7 @@ export function Sidebar({ view, onSelect, connectedDevice, monitoring, available
   return (
     <aside className="flex w-60 shrink-0 flex-col border-r border-line bg-sidebar">
       <div className="px-4 pt-5 pb-4">
-        <h1 className="text-[15px] font-semibold tracking-tight text-ink">BKMD</h1>
+        <h1 className="text-[15px] font-semibold tracking-tight text-ink">InterDesk</h1>
         <p className="mt-0.5 text-[11px] font-medium tracking-wider text-ink-faint uppercase">Control Center</p>
       </div>
 

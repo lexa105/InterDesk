@@ -1,5 +1,5 @@
 
-# BKMD firmware
+# InterDesk firmware
 
 Firmware is running on esp32s3 as it has both BLE and USB HID capability and its managed with platformio.
 
@@ -16,6 +16,6 @@ with `User_setup.h` in this folder, after platformio downloads libraries
 
 ## Versions
 
-- BKMD_Firmware - main working dir
+- InterDesk_firmware - main working dir
 - AirdropOnly - WIP testing for 
 

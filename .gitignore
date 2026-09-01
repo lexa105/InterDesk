@@ -14,9 +14,12 @@ build/
 *.xccheckout
 *.moved-aside
 *.xcscmblueprint
-*.xcodeproj/project.xcworkspace/xcuserdata/
-*.xcodeproj/xcuserdata/
-*.xcworkspace/xcuserdata/
+# Leading **/ matters: a pattern with a slash anywhere but the end is anchored
+# to the repo root, so the un-prefixed form never matched a project in a
+# subdirectory - which is how xcuserdata ended up tracked in the first place.
+**/*.xcodeproj/project.xcworkspace/xcuserdata/
+**/*.xcodeproj/xcuserdata/
+**/*.xcworkspace/xcuserdata/
 *.playground/
 
 # Swift Package Manager

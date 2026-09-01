@@ -49,9 +49,19 @@ class SettingsStore {
 
     /** Must be called once the app is ready (needs the userData path). */
     public load() {
-        this.filePath = path.join(app.getPath('userData'), 'bkmd-settings.json');
+        this.filePath = path.join(app.getPath('userData'), 'interdesk-settings.json');
+        // Settings written before the BKMD -> InterDesk rename live under the
+        // old filename, and under the old userData directory: naming the app
+        // moved userData from <appData>/electron to <appData>/InterDesk. Read
+        // whichever of those still exists; the next save() writes the new one.
+        const candidates = [
+            this.filePath,
+            path.join(app.getPath('userData'), 'bkmd-settings.json'),
+            path.join(app.getPath('appData'), 'electron', 'bkmd-settings.json'),
+        ];
+        const sourcePath = candidates.find((candidate) => fs.existsSync(candidate));
         try {
-            const raw = JSON.parse(fs.readFileSync(this.filePath, 'utf-8'));
+            const raw = JSON.parse(fs.readFileSync(sourcePath ?? this.filePath, 'utf-8'));
             const merged: AppSettings = { ...DEFAULT_SETTINGS };
             // Pick only known keys so retired fields (e.g. the legacy pc2Side)
             // don't survive on the typed object.

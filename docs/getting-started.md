@@ -1,6 +1,6 @@
 # Getting Started (Electron App)
 
-This guide covers how to install and run the BKMD desktop app (`apps/electron`) on your laptop
+This guide covers how to install and run the InterDesk desktop app (`apps/electron`) on your laptop
 (PC1 — the machine you'll type on).
 
 ## 1. Install Node.js
@@ -24,7 +24,7 @@ npm -v
 
 ```bash
 git clone <repo-url>
-cd BKMD/apps/electron
+cd InterDesk/apps/electron
 ```
 
 ## 3. Install dependencies

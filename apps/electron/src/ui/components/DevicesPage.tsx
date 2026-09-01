@@ -40,7 +40,7 @@ export function DevicesPage({
         <div>
           <h2 className="text-xl font-semibold tracking-tight text-ink">Devices</h2>
           <p className="mt-1 text-[13px] text-ink-dim">
-            Scan for a BKMD dongle nearby and connect to start forwarding input.
+            Scan for an InterDesk dongle nearby and connect to start forwarding input.
           </p>
         </div>
         <button

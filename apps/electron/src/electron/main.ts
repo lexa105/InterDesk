@@ -28,6 +28,10 @@ import { captureOverlay } from './capture-overlay.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Matches electron-builder's productName so the macOS menu bar and the userData
+// directory say "InterDesk" in development too, not "electron".
+app.setName('InterDesk');
+
 let mainWindow: BrowserWindow | null = null;
 const keyMonitor: KeyMonitor = new KeyMonitor();
 const mouseMonitor: MouseMonitor = new MouseMonitor();

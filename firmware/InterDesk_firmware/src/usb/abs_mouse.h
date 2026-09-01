@@ -1,7 +1,7 @@
 /*
   abs_mouse.h
 
-  Absolute-positioning USB HID pointer for the BKMD dongle.
+  Absolute-positioning USB HID pointer for the InterDesk dongle.
 
   The arduino-esp32 core installed for this project (framework-arduinoespressif32
   3.20017 == arduino-esp32 2.0.17) does not ship USBHIDAbsoluteMouse, so this is a

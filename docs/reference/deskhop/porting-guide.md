@@ -1,10 +1,10 @@
-# Porting Guide: DeskHop → BKMD
+# Porting Guide: DeskHop → InterDesk
 
-*How to carry DeskHop's mouse model into BKMD (Electron on PC1 + ESP32-S3 BLE
+*How to carry DeskHop's mouse model into InterDesk (Electron on PC1 + ESP32-S3 BLE
 dongle on PC2). Companion docs in this folder: `ARCHITECTURE.md` (mental
 model), `critical-path.md` (the mouse trace this guide builds on),
 `modules.md`, `history.md`. DeskHop citations are `file:line` in the deskhop
-repo; BKMD citations refer to this repo.*
+repo; InterDesk citations refer to this repo.*
 
 The one-sentence takeaway: **stop mirroring relative deltas; keep a virtual
 cursor in a fixed 0..32767 space and send PC2 absolute positions.** Everything
@@ -12,9 +12,9 @@ below is the working-out of that sentence.
 
 ---
 
-## 1. Concept → BKMD mapping
+## 1. Concept → InterDesk mapping
 
-| DeskHop concept | Where it lives in DeskHop | BKMD equivalent |
+| DeskHop concept | Where it lives in DeskHop | InterDesk equivalent |
 |---|---|---|
 | Virtual cursor 0..32767, both axes | `structs.h:108-109`, `screen.h:20-21` | A `{x, y}` in Electron main process (e.g. in `keymonitor.ts` or a new `mousemonitor.ts`) |
 | Accumulate deltas → clamp | `update_mouse_position`, mouse.c:122-146 | Same math in TS on each uiohook `mousemove`/raw delta |
@@ -89,13 +89,13 @@ report working — DeskHop keeps both interfaces because some situations
 
 Per your CLAUDE.md convention: this change spans the BLE boundary, so it
 touches **both** `apps/electron/src/electron/bluetooth-manager.ts` /
-mouse-sending code **and** `firmware/BKMD_firmware/src/ble/ble_server.h` +
+mouse-sending code **and** `firmware/InterDesk_firmware/src/ble/ble_server.h` +
 the USB HID descriptor. Wire format must agree on both sides.
 
 ## 4. Y remap without hotkeys
 
 DeskHop needs user-recorded `border.top/bottom` per screen because the
-firmware is blind (screen.h:27-31, handlers.c:28-52). BKMD's Electron side
+firmware is blind (screen.h:27-31, handlers.c:28-52). InterDesk's Electron side
 can see: `screen.getAllDisplays()` gives PC1's exact bounds; ask the user
 once for PC2's resolution (one field in the React UI) or let them nudge an
 alignment offset visually.

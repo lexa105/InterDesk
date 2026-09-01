@@ -1,5 +1,6 @@
 {
-  "appId": "com.lexatuan.bkmd",
+  "appId": "com.lexatuan.interdesk",
+  "productName": "InterDesk", 
   "files": ["dist-electron", "dist-react"],
   "extraResources": ["dist-electron/preload.cjs", "src/assets/**"],
   "icon": "./desktopIcon.png",

@@ -4,9 +4,10 @@ Guidance for Claude Code (and future contributors) working in this repository.
 
 ## What this project is
 
-BKMD (Bluetooth Keyboard Mouse Dongle) lets you control one computer ("**PC2**", the target)
-using the keyboard (and eventually mouse) of another computer ("**PC1**", typically a laptop),
-over BLE, via a custom ESP32-S3 USB dongle.
+InterDesk (renamed 2026-09 from BKMD, "Bluetooth Keyboard Mouse Dongle" — the old name still
+survives in internal identifiers, see "Conventions & gotchas") lets you control one computer
+("**PC2**", the target) using the keyboard (and eventually mouse) of another computer ("**PC1**",
+typically a laptop), over BLE, via a custom ESP32-S3 USB dongle.
 
 Motivating use case: a desktop PC + a laptop set up side by side, where the laptop is physically
 in front of/on top of the desktop's keyboard, leaving no room to use it. Instead of reaching
@@ -44,12 +45,13 @@ Laptop (PC1)                         Desktop/target PC (PC2)
 ```
 apps/
   electron/     Active cross-platform desktop app (Electron + React + Tailwind + TypeScript)
-  macOS/        Legacy native Swift/SwiftUI prototype — superseded, kept for reference only
 firmware/
-  BKMD_firmware/        Active ESP32-S3 firmware (PlatformIO + Arduino framework + NimBLE)
+  InterDesk_firmware/    Active ESP32-S3 firmware (PlatformIO + Arduino framework + NimBLE)
   platformio/            Local scratch PlatformIO scaffold, gitignored, not part of the build
 docs/           Project docs; docs/reference/deskhop/ holds the DeskHop analysis (see below)
-python-scripts/, protocol/   Out of scope / not actively maintained — ignore unless asked
+img/            README assets
+archive/        Retired, not maintained — ignore unless asked. macOS-prototype/ (the frozen
+                Swift/SwiftUI app) and python-scripts/ (early spike scripts).
 ```
 
 Ownership split: application (Electron/macOS) is developed by the primary maintainer
@@ -65,7 +67,7 @@ Working:
   accepts the absolute HID descriptor and the cursor tracks PC1 motion 1:1): a virtual
   cursor in 0..32767 space (`mousemonitor.ts` absolute mode), edge-crossing detection on PC1
   (`edge-switcher.ts`), and an absolute-pointer USB HID device on the dongle
-  (`firmware/BKMD_firmware/src/usb/abs_mouse.*`). Settings: `dynamicSwitch`, `pc2Side`,
+  (`firmware/InterDesk_firmware/src/usb/abs_mouse.*`). Settings: `dynamicSwitch`, `pc2Side`,
   `mouseMode` ('absolute'|'relative'). The global shortcut remains as manual switching.
 - Firmware: receiving 8-byte keyboard, 4-byte relative-mouse, and 6-byte absolute-mouse reports
   over BLE and replaying them as USB HID; "AirDrop" advertising toggle via long button press;
@@ -79,12 +81,12 @@ Not yet working / explicitly TODO in code:
 - Screen-position calibration UI exists (`src/ui/components/SwitchingPage.tsx` — drag-to-arrange
   canvas writing `pc2Layout: { side, offset, scale }` via `settings:set-switching`), but the whole
   dynamic-switch pipeline is untested on real hardware.
-- `apps/macOS` is frozen; do not add new features there — port relevant logic to
+- `archive/macOS-prototype` is frozen; do not add new features there — port relevant logic to
   `apps/electron` instead.
 
 ## BLE protocol (dongle firmware ↔ Electron app)
 
-Defined in `firmware/BKMD_firmware/src/ble/ble_server.h`.
+Defined in `firmware/InterDesk_firmware/src/ble/ble_server.h`.
 
 - Service UUID: `B00B`
 - Characteristic `1235` ("DATA", write/write-without-response): HID reports
@@ -120,7 +122,7 @@ Key files:
 - `src/ui/` — React/Tailwind renderer (functional: device list, dongle settings, keybind
   recorder, switching/arrangement page — all wired over the `window.bkmd` preload bridge)
 
-### Firmware (`firmware/BKMD_firmware`)
+### Firmware (`firmware/InterDesk_firmware`)
 
 PlatformIO project with two environments:
 - `esp32-s3-devkitc-1` — generic ESP32-S3 dev board, no display
@@ -139,12 +141,12 @@ first library download (see root README "Notes" section).
 ## Reference material: DeskHop analysis
 
 `docs/reference/deskhop/` contains a deep-dive analysis of the DeskHop firmware
-(https://github.com/hrvach/deskhop), an open-source hardware KVM whose mouse model BKMD is
+(https://github.com/hrvach/deskhop), an open-source hardware KVM whose mouse model InterDesk is
 adopting. It is the design blueprint for replacing today's relative-delta mouse forwarding with
 an **absolute-coordinate model**: a virtual cursor in a fixed 0..32767 space, edge-crossing
 detection to switch machines, and the dongle enumerating as an absolute HID pointer to PC2.
 
-- `porting-guide.md` — **start here**: DeskHop concept → BKMD equivalent, the exact coordinate
+- `porting-guide.md` — **start here**: DeskHop concept → InterDesk equivalent, the exact coordinate
   math, the proposed 6-byte absolute-mouse BLE payload, the Electron-side state machine, and
   which ~80% of DeskHop to ignore.
 - `critical-path.md` — one mouse movement traced end to end through DeskHop (the model itself).
@@ -164,9 +166,14 @@ no C experience — explain C/firmware concepts as they come up.
 - Several files mix English and Czech comments/TODOs (e.g. `main.cpp`, `keymonitor.ts`) — this is
   normal for this repo given the two collaborators; don't "clean up" language when editing nearby
   code unless asked.
-- Do not touch `python-scripts/` or `protocol/` unless explicitly asked — they're excluded from
-  the active app/firmware work described above.
+- Do not touch anything under `archive/` unless explicitly asked — it's excluded from the active
+  app/firmware work described above.
+- The rename to InterDesk covered user-visible surfaces only. Internal identifiers deliberately
+  still say bkmd: the `window.bkmd` preload bridge and its `BkmdApi` type, and the
+  `bkmd-capture-overlay` session partition. Leave them alone unless asked to rename them —
+  changing the bridge means touching the preload, the `.d.ts`, and every renderer call site at
+  once. `settings-store.ts` reads the legacy `bkmd-settings.json` once for migration.
 - When making changes that span the BLE boundary (report format, characteristic UUIDs, packet
   framing), update **both** `apps/electron/src/electron/keymonitor.ts` /
-  `bluetooth-manager.ts` and `firmware/BKMD_firmware/src/ble/ble_server.h` — they must agree on
+  `bluetooth-manager.ts` and `firmware/InterDesk_firmware/src/ble/ble_server.h` — they must agree on
   wire format since there's no shared schema/codegen between the two languages.

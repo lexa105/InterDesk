@@ -1,4 +1,4 @@
-/* BKMD TFT status display. */
+/* InterDesk TFT status display. */
 
 #include "display.h"
 

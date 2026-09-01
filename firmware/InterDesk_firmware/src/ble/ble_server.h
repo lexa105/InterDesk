@@ -54,7 +54,9 @@ struct BlePacket {
 static const NimBLEUUID SVC_UUID("B00B");
 static const NimBLEUUID DATA_UUID("1235");
 
-constexpr const char* SERVER_NAME = "BLE Universal Dongle";
+// Also the advertised name - this is the string the InterDesk app shows in its
+// device list, so the two must not drift apart.
+constexpr const char* SERVER_NAME = "InterDesk Dongle";
 
 
 class BleServer {

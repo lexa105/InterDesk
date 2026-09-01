@@ -42,7 +42,7 @@ void BleServer::start() {
     pService->start();
 
     _adv = NimBLEDevice::getAdvertising();
-    _adv->setName("BLE-Dongle");
+    _adv->setName(SERVER_NAME);
     _adv->addServiceUUID(pService->getUUID());
     _adv->enableScanResponse(true);
     _adv->start();

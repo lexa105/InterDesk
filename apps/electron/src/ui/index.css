@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 /*
- * BKMD control-center design tokens - macOS dark preferences look.
+ * InterDesk control-center design tokens - macOS dark preferences look.
  * One accent blue, muted grays, 1px borders on rounded surfaces.
  * Exposed through Tailwind v4 @theme so classes like bg-surface,
  * text-ink-dim, border-line, bg-accent work everywhere.

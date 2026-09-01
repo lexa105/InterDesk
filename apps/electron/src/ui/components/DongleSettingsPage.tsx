@@ -45,7 +45,7 @@ export function DongleSettingsPage({
           <h2 className="truncate text-xl font-semibold tracking-tight text-ink">{device.name}</h2>
           <p className="mt-0.5 flex items-center gap-1.5 text-[13px] text-ink-dim">
             <span className="size-1.5 rounded-full bg-ok" />
-            Connected · BKMD dongle
+            Connected · InterDesk dongle
           </p>
         </div>
       </header>

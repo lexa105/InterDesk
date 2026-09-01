@@ -166,7 +166,7 @@ export function SwitchingPage({ settings, onSettingsChange }: SwitchingPageProps
       <header className="mb-8">
         <h2 className="text-xl font-semibold tracking-tight text-ink">Switching</h2>
         <p className="mt-0.5 text-[13px] text-ink-dim">
-          Tell BKMD where the target computer sits relative to this one.
+          Tell InterDesk where the target computer sits relative to this one.
         </p>
       </header>
 
