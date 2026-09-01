@@ -47,11 +47,20 @@ app/            Active cross-platform desktop app (Electron + React + Tailwind +
 firmware/
   InterDesk_firmware/    Active ESP32-S3 firmware (PlatformIO + Arduino framework + NimBLE)
   platformio/            Local scratch PlatformIO scaffold, gitignored, not part of the build
-docs/           Project docs; docs/reference/deskhop/ holds the DeskHop analysis (see below)
+docs/           Project docs; docs/reference/deskhop/ holds the DeskHop analysis (see below).
+                Its reference/, sessions/ and getting-started.md are gitignored — see the note
+                below.
 img/            README assets
-archive/        Retired, not maintained — ignore unless asked. macOS-prototype/ (the frozen
-                Swift/SwiftUI app) and python-scripts/ (early spike scripts).
+archive/        Retired, not maintained — ignore unless asked. Gitignored. macOS-prototype/
+                (the frozen Swift/SwiftUI app) and python-scripts/ (early spike scripts).
 ```
+
+**Local-only paths (gitignored as of 2026-09).** `archive/`, `docs/reference/`, `docs/sessions/`
+and `docs/getting-started.md` were untracked and added to `.gitignore` — they live on the primary
+maintainer's machine only. A fresh clone will not have them, so every reference to them in this
+file (including the DeskHop section below) is a dead pointer outside that working copy. If you are
+on a clone that lacks them, say so instead of guessing at their contents; ask the maintainer to
+share the file.
 
 Ownership split: the desktop app is developed by the primary maintainer
 (lexatuan@gmail.com); firmware is developed by hardware collaborator **@Dubleriino**. Firmware
@@ -139,9 +148,9 @@ first library download (see root README "Notes" section).
 
 ## Reference material: DeskHop analysis
 
-`docs/reference/deskhop/` contains a deep-dive analysis of the DeskHop firmware
-(https://github.com/hrvach/deskhop), an open-source hardware KVM whose mouse model InterDesk is
-adopting. It is the design blueprint for replacing today's relative-delta mouse forwarding with
+`docs/reference/deskhop/` (**local-only — gitignored, absent from fresh clones**) contains a
+deep-dive analysis of the DeskHop firmware (https://github.com/hrvach/deskhop), an open-source
+hardware KVM whose mouse model InterDesk is adopting. It is the design blueprint for replacing today's relative-delta mouse forwarding with
 an **absolute-coordinate model**: a virtual cursor in a fixed 0..32767 space, edge-crossing
 detection to switch machines, and the dongle enumerating as an absolute HID pointer to PC2.
 
