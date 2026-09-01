@@ -61,7 +61,8 @@ source comments are frequently written in Czech.
 Working:
 - Electron app: device discovery and connection UI, global shortcut start/stop of keyboard and
   mouse capture, and forwarding HID reports over BLE to a dongle.
-- DeskHop-style **dynamic switching** (implemented 2026-08, not yet hardware-tested): a virtual
+- DeskHop-style **dynamic switching** (implemented 2026-08; hardware-verified 2026-08-30 — PC2
+  accepts the absolute HID descriptor and the cursor tracks PC1 motion 1:1): a virtual
   cursor in 0..32767 space (`mousemonitor.ts` absolute mode), edge-crossing detection on PC1
   (`edge-switcher.ts`), and an absolute-pointer USB HID device on the dongle
   (`firmware/BKMD_firmware/src/usb/abs_mouse.*`). Settings: `dynamicSwitch`, `pc2Side`,

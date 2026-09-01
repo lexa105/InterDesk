@@ -189,7 +189,7 @@ export function SwitchingPage({ settings, onSettingsChange }: SwitchingPageProps
               {(
                 [
                   ['absolute', 'Absolute'],
-                  ['relative', 'Legacy / fallback'],
+                  ['relative', 'Relative (deprecated)'],
                 ] as const
               ).map(([mode, label]) => (
                 <button

@@ -1,4 +1,4 @@
-import {app, BrowserWindow, globalShortcut, ipcMain } from 'electron';
+import {app, BrowserWindow, globalShortcut, ipcMain, screen, type Display } from 'electron';
 
 //Bluetooth Manager
 import { bluetoothManager, type BluetoothDevice, type ConnectionState } from './bluetooth-manager.js'
@@ -21,6 +21,9 @@ import { localKeyBlocker } from './local-key-blocker.js';
 // Detects the cursor being thrown at the screen edge facing PC2
 import { edgeSwitcher, type EdgeCrossing } from './edge-switcher.js';
 
+// Pointer-locked window that owns the real cursor while the mouse is forwarded
+import { captureOverlay } from './capture-overlay.js';
+
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -33,6 +36,11 @@ const mouseMonitor: MouseMonitor = new MouseMonitor();
 // monitors actually run also depends on the forwardKeyboard/forwardMouse
 // settings - see syncMonitors().
 let monitoringActive = false;
+
+// Display the capture overlay should cover. Set by the 'crossed' handler (the
+// screen the cursor left from); a manual keybind switch has no crossing, so
+// syncMonitors() falls back to whichever display the cursor sits on.
+let overlayDisplay: Display | null = null;
 
 async function createWindow() {
     mainWindow = new BrowserWindow({
@@ -82,6 +90,16 @@ function syncMonitors() {
         mouseMonitor.start(settings.mouseMode, oppositeEdge(settings.pc2Layout.side));
     }
     if (!wantMouse && mouseMonitor.isRunning) mouseMonitor.stop();
+
+    // The overlay only makes sense in absolute mode - relative mode has no
+    // virtual cursor to steer and must never get covered by it. Hidden AFTER
+    // mouseMonitor.stop() above, so the final zero-button report is already out.
+    if (wantMouse && settings.mouseMode === 'absolute') {
+        captureOverlay.show(overlayDisplay ?? screen.getDisplayNearestPoint(screen.getCursorScreenPoint()));
+    } else {
+        captureOverlay.hide();
+        overlayDisplay = null;
+    }
 
     // While forwarding, the keyboard belongs to PC2: swallow local keystrokes
     // so only the switch keybind does anything on this machine.
@@ -268,8 +286,20 @@ app.on('ready', async () => {
     // enters PC2's screen, then hand input over.
     edgeSwitcher.on('crossed', (crossing: EdgeCrossing) => {
         mouseMonitor.seedPosition(crossing.vx, crossing.vy, crossing.display, crossing.returnEdge);
+        // Cover the display the cursor left from - that's where it is pinned.
+        overlayDisplay = crossing.display;
         setMonitoring(true);
     })
+
+    // Raw movement deltas from the pointer-locked overlay. This coexists with the
+    // uiohook path instead of replacing it: while the lock holds, the real cursor
+    // is frozen so uiohook-derived deltas are zero, and when the lock could not be
+    // acquired the overlay sends nothing - either way nothing is counted twice.
+    captureOverlay.onDelta((dx, dy) => mouseMonitor.applyDelta(dx, dy));
+
+    captureOverlay.on('lock-changed', (locked: boolean) => {
+        console.log(`Capture overlay pointer lock: ${locked ? 'acquired' : 'released'}`);
+    });
 
     // Virtual cursor pushed back out through the edge facing PC1.
     mouseMonitor.on('edge-return', () => {
@@ -286,6 +316,7 @@ async function cleanup() {
     edgeSwitcher.setEnabled(false);
     keyMonitor.stop();
     mouseMonitor.stop();
+    captureOverlay.hide();
     await bluetoothManager.disconnect()
 }
 
