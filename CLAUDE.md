@@ -43,8 +43,7 @@ Laptop (PC1)                         Desktop/target PC (PC2)
 ## Repo layout
 
 ```
-apps/
-  electron/     Active cross-platform desktop app (Electron + React + Tailwind + TypeScript)
+app/            Active cross-platform desktop app (Electron + React + Tailwind + TypeScript)
 firmware/
   InterDesk_firmware/    Active ESP32-S3 firmware (PlatformIO + Arduino framework + NimBLE)
   platformio/            Local scratch PlatformIO scaffold, gitignored, not part of the build
@@ -54,7 +53,7 @@ archive/        Retired, not maintained — ignore unless asked. macOS-prototype
                 Swift/SwiftUI app) and python-scripts/ (early spike scripts).
 ```
 
-Ownership split: application (Electron/macOS) is developed by the primary maintainer
+Ownership split: the desktop app is developed by the primary maintainer
 (lexatuan@gmail.com); firmware is developed by hardware collaborator **@Dubleriino**. Firmware
 source comments are frequently written in Czech.
 
@@ -82,7 +81,7 @@ Not yet working / explicitly TODO in code:
   canvas writing `pc2Layout: { side, offset, scale }` via `settings:set-switching`), but the whole
   dynamic-switch pipeline is untested on real hardware.
 - `archive/macOS-prototype` is frozen; do not add new features there — port relevant logic to
-  `apps/electron` instead.
+  `app` instead.
 
 ## BLE protocol (dongle firmware ↔ Electron app)
 
@@ -102,7 +101,7 @@ The firmware decodes the data channel through a FreeRTOS queue (`BlePacket`) con
 
 ## Building & running
 
-### Electron app (`apps/electron`)
+### Electron app (`app`)
 
 ```bash
 npm install
@@ -174,6 +173,6 @@ no C experience — explain C/firmware concepts as they come up.
   changing the bridge means touching the preload, the `.d.ts`, and every renderer call site at
   once. `settings-store.ts` reads the legacy `bkmd-settings.json` once for migration.
 - When making changes that span the BLE boundary (report format, characteristic UUIDs, packet
-  framing), update **both** `apps/electron/src/electron/keymonitor.ts` /
+  framing), update **both** `app/src/electron/keymonitor.ts` /
   `bluetooth-manager.ts` and `firmware/InterDesk_firmware/src/ble/ble_server.h` — they must agree on
   wire format since there's no shared schema/codegen between the two languages.

@@ -88,7 +88,7 @@ report working — DeskHop keeps both interfaces because some situations
 (usb_descriptors.c:70-81, history.md macOS saga).
 
 Per your CLAUDE.md convention: this change spans the BLE boundary, so it
-touches **both** `apps/electron/src/electron/bluetooth-manager.ts` /
+touches **both** `app/src/electron/bluetooth-manager.ts` /
 mouse-sending code **and** `firmware/InterDesk_firmware/src/ble/ble_server.h` +
 the USB HID descriptor. Wire format must agree on both sides.
 

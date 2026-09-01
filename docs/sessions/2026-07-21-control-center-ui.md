@@ -1,5 +1,9 @@
 # Session notes — Control Center UI (2026-07-21)
 
+> Historical record: names and paths are as they were on this date. The project was renamed
+> BKMD → InterDesk and `apps/electron/` became `app/` in 2026-09; `bkmd-settings.json` is now
+> `interdesk-settings.json`. `window.bkmd` is unchanged.
+
 Branch: `feature/control-center-ui` (off `main`)
 Session: Claude Code, continuing from the device-management-UI session (2026-07-20).
 

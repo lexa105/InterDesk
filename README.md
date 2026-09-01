@@ -66,7 +66,7 @@ When input forwarding is active, the app captures keyboard and mouse events, con
 ### Run the app
 
 ```bash
-cd apps/electron
+cd app
 npm install
 npm run dev
 ```
