@@ -1,89 +1,72 @@
 #pragma once
 #include <Arduino.h>
 #include <NimBLEDevice.h>
+#include <atomic>
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "ble_callbacks.h"
 
-constexpr size_t BLE_MAX_PAYLOAD = 128;
-
-// ---------------------------------------------------------------------------
-// Wire format (DATA characteristic 1235, service B00B).
-//
-// This header is the reference for the BLE protocol shared with the Electron
-// app. There is no codegen between the two sides, so any change here must be
-// mirrored there. The payload length alone selects the report type; decoding
-// happens in hid_decode() in main.cpp.
-//
-// 8 bytes -> USB HID boot keyboard report
-//   [0]    modifier bitmask
-//   [1]    reserved (0)
-//   [2..7] up to six HID usage codes of currently pressed keys
-//
-// 4 bytes -> relative mouse report
-//   [0] buttons bitmask (bit0 left, bit1 right, bit2 middle)
-//   [1] dx    (int8)
-//   [2] dy    (int8)
-//   [3] wheel (int8)
-//
-// 6 bytes -> absolute mouse report
-//   [0]    buttons bitmask (bit0 left, bit1 right, bit2 middle)
-//   [1..2] x, uint16 little-endian, 0..32767
-//   [3..4] y, uint16 little-endian, 0..32767
-//   [5]    wheel (int8, still relative)
-//   X/Y live in a virtual 0..32767 coordinate space that the host maps onto the
-//   whole screen. Both mouse modes stay enabled at once; relative is the
-//   fallback/gaming path.
-//
-// Any other length is rejected.
-// ---------------------------------------------------------------------------
-
-enum class BlePacketType : uint8_t {
-  HidReport,
-  Disconnected,
-};
-
-struct BlePacket {
-  BlePacketType type;
-  uint16_t len;
-  uint8_t  data[BLE_MAX_PAYLOAD];
-};
-
-
+// Protocol v2: service B00B. Both characteristics require authenticated encryption.
+// DATA 1235: 8 bytes keyboard, 4 bytes relative mouse, 6 bytes absolute mouse.
+// Keyboard: modifiers, reserved=0, six usages.
+// Relative: buttons, dx i8, dy i8, wheel i8.
+// Absolute: buttons, x u16-LE, y u16-LE (0..32767), wheel i8.
+// CONTROL 1236: read => version byte 2; write 0 => release/reset, 1 => heartbeat.
+// App and firmware must be upgraded together. No unsecured legacy fallback.
+constexpr uint8_t PROTOCOL_VERSION = 2;
+constexpr uint32_t MAX_INPUT_AGE_MS = 100;
+constexpr uint32_t LINK_IDLE_TIMEOUT_MS = 1500;
+constexpr uint32_t PAIRING_WINDOW_MS = 60000;
+constexpr size_t BLE_MAX_PAYLOAD = 8;
 
 static const NimBLEUUID SVC_UUID("B00B");
 static const NimBLEUUID DATA_UUID("1235");
-
-// Also the advertised name - this is the string the InterDesk app shows in its
-// device list, so the two must not drift apart.
+static const NimBLEUUID CONTROL_UUID("1236");
 constexpr const char* SERVER_NAME = "InterDesk Dongle";
 
+enum class BlePacketType : uint8_t { HidReport, Reset };
+struct BlePacket {
+    BlePacketType type;
+    uint8_t len;
+    uint8_t data[BLE_MAX_PAYLOAD];
+    uint32_t receivedAt;
+    uint32_t generation;
+};
 
 class BleServer {
 public:
-  explicit BleServer(QueueHandle_t rxQueue);
-  void start();            // init + start advertising
-
-  //soft start
-  void soft_stop(bool disconnectClient /* = true */);
-  void resume();
-  void setConnected(uint16_t connHandle) { _connected = true; _connHandle = connHandle; }
-  void handleDisconnected();
-  bool advEnabled() const { return _advEnabled; }
+    explicit BleServer(QueueHandle_t rxQueue);
+    void start();
+    void poll();
+    void openPairingWindow(bool eraseBonds = false);
+    bool pairingOpen() const;
+    uint32_t pairingPasskey() const { return _passkey.load(); }
+    bool authorized() const { return _authorized.load(); }
+    uint32_t generation() const { return _generation.load(); }
+    bool handleConnected(NimBLEConnInfo& info);
+    void handleAuthenticated(NimBLEConnInfo& info);
+    void handleDisconnected(uint16_t handle);
+    uint32_t displayPasskey();
+    bool canAcceptInput(const NimBLEConnInfo& info) const;
+    void receive(const uint8_t* data, size_t len, bool control);
+    void failLink();
 
 private:
-  NimBLEServer* pServer = nullptr;
-  NimBLEService* pService = nullptr;
-  NimBLECharacteristic* pDataCharacteristic = nullptr;
-
-  ServerCallbacks _serverCallbacks;
-  CharacteristicDataCallbacks _dataCallbacks;
-
-  bool _started = false;
-  bool _connected = false;
-  uint16_t _connHandle = 0xFFFF;
-  NimBLEAdvertising* _adv = nullptr;
-  bool _advEnabled = true;   // when false, onDisconnect must NOT restart advertising
-  QueueHandle_t _rxQueue;
-
+    void resetInput();
+    QueueHandle_t _rxQueue;
+    NimBLEServer* _server = nullptr;
+    ServerCallbacks _serverCallbacks;
+    CharacteristicDataCallbacks _dataCallbacks;
+    CharacteristicControlCallbacks _controlCallbacks;
+    std::atomic<uint16_t> _connHandle{BLE_HS_CONN_HANDLE_NONE};
+    std::atomic<bool> _authorized{false};
+    std::atomic<bool> _closing{false};
+    std::atomic<bool> _pairingOpen{false};
+    std::atomic<uint32_t> _pairingStartedAt{0};
+    std::atomic<uint32_t> _passkey{0};
+    std::atomic<uint32_t> _lastPacketAt{0};
+    std::atomic<uint32_t> _connectedAt{0};
+    std::atomic<uint32_t> _generation{0};
+    bool _knownPeer = false; // Accessed only by the NimBLE host task.
+    bool _pairingRequested = false;
 };

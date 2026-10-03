@@ -1,7 +1,7 @@
 import { uIOhook } from 'uiohook-napi';
 import { EventEmitter } from 'node:events';
 import { screen, type Display } from 'electron';
-import { acquireUiohook, releaseUiohook } from './uiohook-lifecycle.js';
+import { acquireUiohook, releaseUiohook, isFreshInput } from './uiohook-lifecycle.js';
 import { settingsStore } from './settings-store.js';
 import { SCALE, JUMP_THRESHOLD_PX, type ReturnEdge } from './mousemonitor.js';
 
@@ -31,7 +31,10 @@ class EdgeSwitcher extends EventEmitter {
 
     constructor() {
         super();
-        uIOhook.on('mousemove', (e) => this.handleMove(e.x, e.y));
+        uIOhook.on('mousemove', (e) => {
+            if (!isFreshInput(e)) { this.lastX = this.lastY = null; return; }
+            this.handleMove(e.x, e.y);
+        });
     }
 
     public setEnabled(enabled: boolean) {

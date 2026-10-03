@@ -1,21 +1,30 @@
-
 # InterDesk firmware
 
-Firmware is running on esp32s3 as it has both BLE and USB HID capability and its managed with platformio.
+ESP32-S3 Arduino firmware using NimBLE and native USB HID, built with PlatformIO.
 
-In platformio config file there is currently setup for generic esp32s3 mini dev board and esp32s3 lilygo dongle - ideal as it has male USB-A.
-
-**for tft display to work on esp dongle target correct User_setup.h needs to be used in tft_espi lib**
-replace
+```sh
+cd InterDesk_firmware
+pio run                                      # build both supported environments
+pio run -e lilygo-t-dongle-s3 -t upload        # only after checking your board/wiring
+pio device monitor -b 115200
+./test/host/run.sh                            # BLE policy tests, no hardware needed
 ```
-.pio/libdeps/lilygo-t-dongle-s3/TFT_eSPI/User_Setup.h
-```
-with `User_setup.h` in this folder, after platformio downloads libraries
 
+Targets: `esp32-s3-devkitc-1` (4 MB flash, no display) and
+`lilygo-t-dongle-s3` (16 MB flash, TFT). Platform and NimBLE versions are pinned.
+Both targets explicitly select TinyUSB for USB HID.
 
+The display target includes the tracked `../User_Setup.h` automatically; do not
+replace files inside `.pio/libdeps`. **Check the GPIO assignments for your board**:
+the original setup uses pins 10–14, which differ from the official LilyGO wiring.
+They are preserved pending confirmation of the actual dongle variant.
 
-## Versions
+The button on GPIO0 opens pairing after a two-second hold and release. Enter the
+six-digit code from the TFT (or serial console on the generic board) in the laptop's
+Bluetooth pairing dialog. An eight-second hold and release clears stored bonds.
+Pairing expires after 60 seconds. Trusted laptops reconnect using stored bonds.
 
-- InterDesk_firmware - main working dir
-- AirdropOnly - WIP testing for 
-
+Firmware and app must be upgraded together to protocol v2. Unencrypted input,
+legacy Bluetooth pairing and unauthenticated pairing are rejected. The old
+advertising-only “AirDrop” button action has been replaced with pairing controls.
+See [protocol, security and hardware verification](../docs/input-and-ble.md).

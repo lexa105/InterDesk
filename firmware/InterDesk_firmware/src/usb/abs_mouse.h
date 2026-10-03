@@ -38,6 +38,7 @@
 class USBHIDAbsMouse : public USBHIDDevice {
 private:
   USBHID hid;
+  bool _deliveryUncertain = false;
   uint8_t _buttons;
   uint16_t _x;
   uint16_t _y;

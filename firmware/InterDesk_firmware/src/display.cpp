@@ -15,7 +15,7 @@ static TFT_eSPI tft = TFT_eSPI();
 #define TERM_HISTORY 0x03E0 //tmave zelenaa 
 
 //KEYBOARD MODE
-const char* keyboard_history[3] = {"", "", ""};
+char keyboard_history[3][96] = {};
 
 void Display::display_init() {
     tft.init();
@@ -55,9 +55,9 @@ void Display::display_show_history(const char* text){
     tft.fillRect(0, 56, tft.width(), 8, TERM_BG);
     tft.fillRect(0, 72, tft.width(), 8, TERM_BG);
 
-    keyboard_history[2] = keyboard_history[1];
-    keyboard_history[1] = keyboard_history[0];
-    keyboard_history[0] = text;
+    memcpy(keyboard_history[2], keyboard_history[1], sizeof(keyboard_history[2]));
+    memcpy(keyboard_history[1], keyboard_history[0], sizeof(keyboard_history[1]));
+    snprintf(keyboard_history[0], sizeof(keyboard_history[0]), "%s", text);
 
     tft.setTextFont(1); // GLCD 8x8
     tft.setTextColor(TERM_HISTORY, TERM_BG);

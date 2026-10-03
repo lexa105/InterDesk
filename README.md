@@ -52,7 +52,7 @@ That means it can work with everything from your everyday desktop to locked-down
 ## How does it work?
 
 1. Plug the InterDesk dongle into the computer you want to control.
-2. Open the InterDesk app on your laptop and connect to the dongle over Bluetooth.
+2. Hold the dongle button for two seconds and release, then connect in InterDesk. On first pairing, enter the dongle’s six-digit code in the laptop’s Bluetooth dialog. Trusted laptops reconnect without a code.
 3. Set up or use the activation shortcut to switch input forwarding on and off.
 4. When active, the app captures your keyboard and mouse input and converts it into standard HID reports.
 5. These reports are sent over Bluetooth to the dongle.
@@ -71,7 +71,7 @@ InterDesk is built around the ESP32-S3 as it gives all we need in small and chea
 
 Our main hardware is **[this dongle](https://www.aliexpress.com/item/1005009024098181.html?spm=a2g0o.detail.0.0.7031xi6bxi6b8k&productId=1005009024098181&pdp_ext_f=%7B%22tabScene%22%3A%22retail%22%2C%22sku_id%22%3A12000047619166787%2C%22origProductId%22%3A%221005009024098181%22%7D#nav-description)** with male USB-A connector for **less then 10euro**. Firmware can also run on other cheaper boards, such as an **ESP32-S3 Zero**, but you need cable. Unfortunatelly we didnt find widely available board with usbc male connector
 
-Firmware for esp32s3 is flashed using platformio. TODO - user_setup.h fix for dongle plaformio target.
+Firmware is built and flashed with PlatformIO. The TFT configuration is included from the repository; verify the GPIO assignments for your board before flashing. See [firmware setup](firmware/README.md).
 
 
 ## App
@@ -87,6 +87,18 @@ The app uses:
 When input forwarding is active, the app captures keyboard and mouse events, converts them into HID reports and sends them to the dongle over BLE.
 
 ![InterDesk demo](img/donge.gif)
+
+### Secure pairing and input reliability
+
+Update the app and dongle firmware together. Pairing now requires a physical button
+press, a six-digit code, and authenticated LE Secure Connections. The native macOS
+and Windows drivers can provide this; **Linux input forwarding is currently blocked**
+because Noble’s Linux HCI driver lacks authenticated Secure Connections pairing.
+Actual OS pairing/reconnect behavior still needs verification on hardware.
+
+The input pipeline bounds BLE writes, coalesces mouse motion, discards expired
+input, and releases held controls after link loss. See [protocol, implementation
+notes and remaining checks](docs/input-and-ble.md).
 
 ### Run the app
 

@@ -1,7 +1,9 @@
 import { uIOhook } from "uiohook-napi";
 import { EventEmitter } from 'node:events';
-import { acquireUiohook, releaseUiohook } from './uiohook-lifecycle.js';
+import { acquireUiohook, releaseUiohook, isFreshInput } from './uiohook-lifecycle.js';
 import { screen, type Display } from 'electron';
+import { performance } from 'node:perf_hooks';
+import { MAX_INPUT_AGE_MS, type ReportKind } from './hid-transport.js';
 
 // Bitmask matches a standard USB HID mouse boot report, byte 0.
 const BUTTON_LEFT = 0x01;
@@ -62,6 +64,11 @@ export class MouseMonitor extends EventEmitter {
     private unitsPerPxY = 1;
     private returnEdge: ReturnEdge = 'left';
     private seeded = false;
+    private pointerLocked = false;
+    private pendingDx = 0;
+    private pendingDy = 0;
+    private pendingMoveAt = 0;
+    private edgeReturnEnabled = true;
 
     // Trailing-edge coalescing for movement reports.
     private lastMoveSentAt = 0;
@@ -71,25 +78,45 @@ export class MouseMonitor extends EventEmitter {
         return this._isRunning;
     }
 
+    public setPointerLocked(locked: boolean) {
+        this.pointerLocked = locked;
+        this.lastX = null;
+        this.lastY = null;
+    }
+
+    public setEdgeReturnEnabled(enabled: boolean) {
+        this.edgeReturnEnabled = enabled;
+    }
+
     constructor() {
         super();
 
-        uIOhook.on('mousemove', (e) => this.handleMove(e.x, e.y));
+        uIOhook.on('mousemove', (e) => {
+            if (!isFreshInput(e)) {
+                this.lastX = this.lastY = null;
+                if (this._isRunning) this.emit('stalled');
+                return;
+            }
+            this.handleMove(e.x, e.y);
+        });
 
         uIOhook.on('mousedown', (e) => {
             if (!this._isRunning) return;
+            if (!isFreshInput(e)) { this.emit('stalled'); return; }
             this.pressedButtons |= hidButtonBit(e.button);
             this.sendImmediate();
         });
 
         uIOhook.on('mouseup', (e) => {
             if (!this._isRunning) return;
+            if (!isFreshInput(e)) { this.emit('stalled'); return; }
             this.pressedButtons &= ~hidButtonBit(e.button);
             this.sendImmediate();
         });
 
         uIOhook.on('wheel', (e) => {
             if (!this._isRunning) return;
+            if (!isFreshInput(e)) { this.emit('stalled'); return; }
             // Vertical scroll only for now; horizontal (direction===HORIZONTAL) is dropped.
             const wheel = e.direction === 3 ? clampToInt8(-e.rotation) : 0;
             if (wheel !== 0) this.sendImmediate(wheel);
@@ -122,6 +149,7 @@ export class MouseMonitor extends EventEmitter {
         this.lastX = null;
         this.lastY = null;
         this.lastMoveSentAt = 0;
+        this.pendingDx = this.pendingDy = 0;
         // Manual keybind switch: nobody seeded us, so take over from wherever
         // the real cursor happens to be.
         if (mode === 'absolute' && !this.seeded) this.seedFromCursor();
@@ -136,6 +164,7 @@ export class MouseMonitor extends EventEmitter {
         this.pressedButtons = 0x00;
         this.lastX = null;
         this.lastY = null;
+        this.pendingDx = this.pendingDy = 0;
 
         if (this.mode === 'absolute') {
             // Release any buttons the dongle thinks are still held, at the last
@@ -161,7 +190,7 @@ export class MouseMonitor extends EventEmitter {
     }
 
     private handleMove(x: number, y: number) {
-        if (!this._isRunning) return;
+        if (!this._isRunning || this.pointerLocked) return;
 
         if (this.lastX === null || this.lastY === null) {
             this.lastX = x;
@@ -180,18 +209,22 @@ export class MouseMonitor extends EventEmitter {
     }
 
     /**
-     * Single entry point for "a raw pixel delta happened" - kept separate from
-     * the uiohook handler so a pointer-captured overlay window can feed it later.
-     *
-     * Known limitation: while forwarding, the local macOS cursor pins against
-     * the physical screen edge, so coordinate-derived deltas collapse to zero
-     * exactly at the edges. The overlay will replace this delta source.
+     * Receives pointer-locked deltas, or coordinate-derived deltas when lock
+     * is unavailable. Only one source is active at a time.
      */
     public applyDelta(dx: number, dy: number) {
-        if (!this._isRunning) return;
+        if (!this._isRunning || !Number.isFinite(dx) || !Number.isFinite(dy)) return;
+
+        const now = performance.now();
+        if (now - this.pendingMoveAt > MAX_INPUT_AGE_MS) {
+            this.pendingDx = this.pendingDy = 0;
+        }
+        this.pendingMoveAt = now;
 
         if (this.mode === 'relative') {
-            this.sendRelativeReport(clampToInt8(dx), clampToInt8(dy), 0);
+            this.pendingDx = clampToInt8(this.pendingDx + dx);
+            this.pendingDy = clampToInt8(this.pendingDy + dy);
+            this.queueMoveReport();
             return;
         }
 
@@ -208,7 +241,7 @@ export class MouseMonitor extends EventEmitter {
             case 'top': returning = this.vy <= 0 && dy < 0 && Math.abs(dy) > JUMP_THRESHOLD_PX; break;
             case 'bottom': returning = this.vy >= SCALE && dy > 0 && Math.abs(dy) > JUMP_THRESHOLD_PX; break;
         }
-        if (returning) {
+        if (returning && this.edgeReturnEnabled) {
             this.emit('edge-return');
             return;
         }
@@ -222,26 +255,42 @@ export class MouseMonitor extends EventEmitter {
     private queueMoveReport() {
         if (this.moveTimer) return;
 
-        const elapsed = Date.now() - this.lastMoveSentAt;
+        const elapsed = performance.now() - this.lastMoveSentAt;
         if (elapsed >= MOVE_REPORT_INTERVAL_MS) {
-            this.sendAbsoluteReport(0);
+            this.sendMoveReport();
             return;
         }
 
         this.moveTimer = setTimeout(() => {
             this.moveTimer = null;
-            if (this._isRunning) this.sendAbsoluteReport(0);
+            if (this._isRunning && performance.now() - this.pendingMoveAt <= MAX_INPUT_AGE_MS) {
+                this.sendMoveReport();
+            } else {
+                this.pendingDx = this.pendingDy = 0;
+            }
         }, MOVE_REPORT_INTERVAL_MS - elapsed);
     }
 
     /** Buttons and wheel bypass the rate limit - they carry the current position. */
     private sendImmediate(wheel = 0) {
+        this.clearMoveTimer();
         if (this.mode === 'relative') {
-            this.sendRelativeReport(0, 0, wheel);
+            // Include fresh motion before the transition, without generating
+            // another ATT transaction. Old relative motion is discarded.
+            const fresh = performance.now() - this.pendingMoveAt <= MAX_INPUT_AGE_MS;
+            this.sendRelativeReport(fresh ? this.pendingDx : 0, fresh ? this.pendingDy : 0, wheel);
+            this.pendingDx = this.pendingDy = 0;
             return;
         }
-        this.clearMoveTimer();
         this.sendAbsoluteReport(wheel);
+    }
+
+    private sendMoveReport() {
+        if (this.mode === 'absolute') this.sendAbsoluteReport(0, 'motion');
+        else {
+            this.sendRelativeReport(this.pendingDx, this.pendingDy, 0, 'motion');
+            this.pendingDx = this.pendingDy = 0;
+        }
     }
 
     private clearMoveTimer() {
@@ -250,7 +299,7 @@ export class MouseMonitor extends EventEmitter {
         this.moveTimer = null;
     }
 
-    private sendAbsoluteReport(wheel: number) {
+    private sendAbsoluteReport(wheel: number, kind: ReportKind = 'input') {
         // 6-byte absolute mouse report: [buttons, x (uint16 LE), y (uint16 LE), wheel (int8)].
         // Distinct in length from the 4-byte relative report and the 8-byte keyboard
         // report, so firmware's hid_decode() can keep dispatching on pkt.len.
@@ -260,22 +309,21 @@ export class MouseMonitor extends EventEmitter {
         report.writeUInt16LE(Math.round(this.vy), 3);
         report.writeInt8(wheel, 5);
 
-        this.lastMoveSentAt = Date.now();
-        console.log('Sending absolute mouse report to BLE: ', report);
-        this.emit('hid-report', report);
+        this.lastMoveSentAt = performance.now();
+        this.emit('hid-report', report, kind);
     }
 
-    private sendRelativeReport(dx: number, dy: number, wheel: number) {
+    private sendRelativeReport(dx: number, dy: number, wheel: number, kind: ReportKind = 'input') {
         // 4-byte mouse report: [buttons, dx (int8), dy (int8), wheel (int8)].
         // Distinct in length from the 8-byte keyboard report and the legacy 1-byte
         // usage-ID packet, so firmware's hid_decode() can dispatch on pkt.len.
         const report = Buffer.alloc(4, 0);
         report[0] = this.pressedButtons;
-        report.writeInt8(dx, 1);
-        report.writeInt8(dy, 2);
+        report.writeInt8(Math.round(dx), 1);
+        report.writeInt8(Math.round(dy), 2);
         report.writeInt8(wheel, 3);
 
-        console.log('Sending mouse report to BLE: ', report);
-        this.emit('hid-report', report);
+        this.lastMoveSentAt = performance.now();
+        this.emit('hid-report', report, kind);
     }
 }

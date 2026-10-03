@@ -6,7 +6,7 @@ Guidance for Claude Code (and future contributors) working in this repository.
 
 InterDesk (renamed 2026-09 from BKMD, "Bluetooth Keyboard Mouse Dongle" — the old name still
 survives in internal identifiers, see "Conventions & gotchas") lets you control one computer
-("**PC2**", the target) using the keyboard (and eventually mouse) of another computer ("**PC1**",
+("**PC2**", the target) using the keyboard and mouse of another computer ("**PC1**",
 typically a laptop), over BLE, via a custom ESP32-S3 USB dongle.
 
 Motivating use case: a desktop PC + a laptop set up side by side, where the laptop is physically
@@ -66,47 +66,29 @@ Ownership split: the desktop app is developed by the primary maintainer
 (lexatuan@gmail.com); firmware is developed by hardware collaborator **@Dubleriino**. Firmware
 source comments are frequently written in Czech.
 
-## Current implementation status (as of 2026-08)
+## Current implementation status
 
-Working:
-- Electron app: device discovery and connection UI, global shortcut start/stop of keyboard and
-  mouse capture, and forwarding HID reports over BLE to a dongle.
-- DeskHop-style **dynamic switching** (implemented 2026-08; hardware-verified 2026-08-30 — PC2
-  accepts the absolute HID descriptor and the cursor tracks PC1 motion 1:1): a virtual
-  cursor in 0..32767 space (`mousemonitor.ts` absolute mode), edge-crossing detection on PC1
-  (`edge-switcher.ts`), and an absolute-pointer USB HID device on the dongle
-  (`firmware/InterDesk_firmware/src/usb/abs_mouse.*`). Settings: `dynamicSwitch`, `pc2Side`,
-  `mouseMode` ('absolute'|'relative'). The global shortcut remains as manual switching.
-- Firmware: receiving 8-byte keyboard, 4-byte relative-mouse, and 6-byte absolute-mouse reports
-  over BLE and replaying them as USB HID; "AirDrop" advertising toggle via long button press;
-  optional TFT status display on the LilyGO board variant.
+The app and firmware now use secure protocol v2. Read
+[`docs/input-and-ble.md`](docs/input-and-ble.md) before changing capture, queueing,
+pairing, or the wire protocol. It documents the current behavior and hardware checks.
 
-Not yet working / explicitly TODO in code:
-- **Local cursor suppression while forwarding**: uiohook only observes the cursor, so while
-  forwarding the local macOS cursor pins at the physical screen edge and coordinate-derived
-  deltas collapse to zero there (limits movement away from the entry edge on PC2). Planned fix:
-  a pointer-capture overlay window feeding `MouseMonitor.applyDelta()` (already isolated for it).
-- Screen-position calibration UI exists (`src/ui/components/SwitchingPage.tsx` — drag-to-arrange
-  canvas writing `pc2Layout: { side, offset, scale }` via `settings:set-switching`), but the whole
-  dynamic-switch pipeline is untested on real hardware.
-- `archive/macOS-prototype` is frozen; do not add new features there — port relevant logic to
-  `app` instead.
+- DATA characteristic `1235` remains 8-byte keyboard / 4-byte relative mouse /
+  6-byte absolute mouse, on service `B00B`.
+- CONTROL `1236` is an authenticated version read (`2`) and reset (`0`) / heartbeat (`1`) write.
+- Both characteristics require passkey-authenticated LE Secure Connections. Pairing
+  is opened by holding/releasing GPIO0 for 2s, or 8s to erase bonds. No insecure fallback.
+- The app serializes acknowledged writes, coalesces motion, expires input, and
+  invalidates old callbacks at disconnect. Native and overlay capture also check age.
+- The pointer-lock overlay is implemented for both mouse modes. Unlocked movement
+  falls back to uiohook coordinates; the two sources are explicitly exclusive.
+- Firmware releases input on disconnect, inactivity, overflow and USB failure;
+  failed USB releases are retried after resume.
+- Linux secure connections are explicitly unsupported by the present Noble HCI
+  backend. macOS/Windows native pairing and latency need real-device verification.
+- UI/preload/main DTOs live in `app/src/shared/contracts.d.ts` (type-only).
 
-## BLE protocol (dongle firmware ↔ Electron app)
-
-Defined in `firmware/InterDesk_firmware/src/ble/ble_server.h`.
-
-- Service UUID: `B00B`
-- Characteristic `1235` ("DATA", write/write-without-response): HID reports
-  - 8-byte payload → standard USB HID boot-keyboard report (`report[0]` = modifier bitmask,
-    `report[2..7]` = up to 6 pressed HID usage codes)
-  - 4-byte payload → relative mouse report (`buttons`, `dx`, `dy`, `wheel`)
-  - 6-byte payload → absolute mouse report (`buttons` u8, `x` u16-LE, `y` u16-LE, `wheel` i8;
-    x/y in the DeskHop-style 0..32767 virtual space, replayed via the dongle's absolute-pointer
-    HID device so the host OS maps it to the full screen)
-
-The firmware decodes the data channel through a FreeRTOS queue (`BlePacket`) consumed by
-`DecoderTask` in `main.cpp`.
+Historical local-only DeskHop notes may be absent in fresh clones. Current tracked
+protocol and implementation documentation is in `docs/input-and-ble.md`.
 
 ## Building & running
 
@@ -119,7 +101,7 @@ npm run build         # type-check + production build
 npm run dist:mac      # package a macOS .dmg/.app (arm64)
 npm run dist:win       # package for Windows
 npm run dist:linux     # package for Linux
-npm run lint
+npm run check        # lint + tests + Electron/preload compile + renderer build
 ```
 
 Key files:
@@ -143,8 +125,8 @@ pio run -e lilygo-t-dongle-s3 -t upload   # build + flash
 pio device monitor -b 115200               # serial log
 ```
 
-Note: the `lilygo-t-dongle-s3` env requires `TFT_eSPI`'s `User_Setup.h` to be configured after
-first library download (see root README "Notes" section).
+The display configuration is included from `firmware/User_Setup.h` automatically. Its
+existing pins differ from official LilyGO wiring; confirm the physical board before changing them.
 
 ## Reference material: DeskHop analysis
 
@@ -168,7 +150,7 @@ no C experience — explain C/firmware concepts as they come up.
 
 ## Conventions & gotchas
 
-- HID usage-code mapping in `keymonitor.ts` (`MAC_HID_MAP`) is keyed on **macOS** `uiohook-napi`
+- HID usage-code mapping in `keymonitor.ts` (`HID_KEY_MAP`) is keyed on **macOS** `uiohook-napi`
   keycodes — it has not been verified against Windows/Linux keycodes despite the app targeting
   all three via Electron.
 - Several files mix English and Czech comments/TODOs (e.g. `main.cpp`, `keymonitor.ts`) — this is

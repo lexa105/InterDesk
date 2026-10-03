@@ -5,12 +5,14 @@ import { bluetoothManager, type BluetoothDevice, type ConnectionState } from './
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDev } from './util.js';
+import { ACCELERATOR_PATTERN } from './settings-validation.js';
 
 // Key Monitor
 import { KeyMonitor } from './keymonitor.js';
 
 // Mouse Monitor
 import { MouseMonitor } from './mousemonitor.js';
+import type { ReportKind } from './hid-transport.js';
 
 // Persisted user settings (switch keybind, forwarding toggles)
 import { settingsStore, type AppSettings, type Pc2Layout, type Pc2Side } from './settings-store.js';
@@ -40,6 +42,7 @@ const mouseMonitor: MouseMonitor = new MouseMonitor();
 // monitors actually run also depends on the forwardKeyboard/forwardMouse
 // settings - see syncMonitors().
 let monitoringActive = false;
+let keybindCaptureActive = false;
 
 // Display the capture overlay should cover. Set by the 'crossed' handler (the
 // screen the cursor left from); a manual keybind switch has no crossing, so
@@ -62,6 +65,14 @@ async function createWindow() {
     } else {
         mainWindow.loadFile(path.join(app.getAppPath(), '/dist-react/index.html'));
     }
+
+    mainWindow.on('closed', () => {
+        mainWindow = null;
+        app.quit();
+    });
+    mainWindow.webContents.on('render-process-gone', () => setMonitoring(false));
+    mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    mainWindow.webContents.on('will-navigate', (event) => event.preventDefault());
 
 }
 
@@ -86,6 +97,13 @@ function syncMonitors() {
     const settings = settingsStore.get();
     const wantKeyboard = monitoringActive && settings.forwardKeyboard;
     const wantMouse = monitoringActive && settings.forwardMouse;
+    mouseMonitor.setEdgeReturnEnabled(settings.dynamicSwitch);
+    keyMonitor.setSwitchKeybind(settings.switchKeybind);
+
+    // Register the OS shortcuts before starting capture: registration can be
+    // expensive, and must not delay reports that are already being forwarded.
+    if (wantKeyboard) localKeyBlocker.start(settings.switchKeybind);
+    else localKeyBlocker.stop();
 
     if (wantKeyboard && !keyMonitor.isRunning) keyMonitor.start();
     if (!wantKeyboard && keyMonitor.isRunning) keyMonitor.stop();
@@ -95,25 +113,20 @@ function syncMonitors() {
     }
     if (!wantMouse && mouseMonitor.isRunning) mouseMonitor.stop();
 
-    // The overlay only makes sense in absolute mode - relative mode has no
-    // virtual cursor to steer and must never get covered by it. Hidden AFTER
-    // mouseMonitor.stop() above, so the final zero-button report is already out.
-    if (wantMouse && settings.mouseMode === 'absolute') {
+    // Both modes need raw deltas; otherwise relative movement stops when the
+    // local cursor reaches a screen edge. Hide after emitting button releases.
+    if (wantMouse) {
         captureOverlay.show(overlayDisplay ?? screen.getDisplayNearestPoint(screen.getCursorScreenPoint()));
     } else {
         captureOverlay.hide();
         overlayDisplay = null;
     }
 
-    // While forwarding, the keyboard belongs to PC2: swallow local keystrokes
-    // so only the switch keybind does anything on this machine.
-    if (wantKeyboard) localKeyBlocker.start(settings.switchKeybind);
-    else localKeyBlocker.stop();
-
     // The edge watcher only makes sense in LOCAL mode, and only if throwing the
     // cursor at the border could actually reach a dongle.
     edgeSwitcher.setEnabled(
         settings.dynamicSwitch &&
+        settings.mouseMode === 'absolute' &&
         !monitoringActive &&
         settings.forwardMouse &&
         bluetoothManager.getConnectionState() === 'connected'
@@ -121,18 +134,12 @@ function syncMonitors() {
 }
 
 function setMonitoring(active: boolean) {
-    monitoringActive = active;
-    console.log(active ? 'Starting monitoring...' : 'Stopping monitoring...');
+    monitoringActive = active && !keybindCaptureActive && bluetoothManager.getConnectionState() === 'connected';
+    if (!monitoringActive) bluetoothManager.resetInput();
+    console.log(monitoringActive ? 'Starting monitoring...' : 'Stopping monitoring...');
     syncMonitors();
     mainWindow?.webContents.send('monitor:state-changed', monitoringActive);
 }
-
-// globalShortcut.register is lenient about malformed accelerators, so gate
-// keybind:set on the token grammar the renderer's recorder can produce.
-const ACCELERATOR_PATTERN = new RegExp(
-    '^((CommandOrControl|CmdOrCtrl|Command|Cmd|Control|Ctrl|Alt|Option|Shift|Super|Meta)\\+)+' +
-    '([A-Z0-9]|F([1-9]|1[0-9]|2[0-4])|Space|Enter|Esc|Escape|Backspace|Delete|Tab|Up|Down|Left|Right|Home|End|PageUp|PageDown|[-=\\[\\]\\\\;\',./`])$'
-);
 
 function registerSwitchKeybind(accelerator: string): boolean {
     try {
@@ -144,15 +151,26 @@ function registerSwitchKeybind(accelerator: string): boolean {
 }
 
 
+function handleIpc(channel: string, listener: Parameters<typeof ipcMain.handle>[1]) {
+    ipcMain.handle(channel, (event, ...args) => {
+        if (!mainWindow || event.sender !== mainWindow.webContents ||
+            event.senderFrame !== mainWindow.webContents.mainFrame) {
+            throw new Error('IPC is restricted to the InterDesk main window.');
+        }
+        return listener(event, ...args);
+    });
+}
+
 function registerBluetoothIpc() {
-    ipcMain.handle('bluetooth:is-available', () => bluetoothManager.isBluetoothAvailable());
-    ipcMain.handle('bluetooth:is-scanning', () => bluetoothManager.isScanning());
-    ipcMain.handle('bluetooth:get-connection-state', () => bluetoothManager.getConnectionState());
-    ipcMain.handle('bluetooth:get-devices', () => bluetoothManager.getDiscoveredDevices());
-    ipcMain.handle('bluetooth:start-scan', () => bluetoothManager.startScanning());
-    ipcMain.handle('bluetooth:stop-scan', () => bluetoothManager.stopScanning());
-    ipcMain.handle('bluetooth:disconnect', () => bluetoothManager.disconnect());
-    ipcMain.handle('bluetooth:connect', async (_event, deviceId: string) => {
+    handleIpc('bluetooth:is-available', () => bluetoothManager.isBluetoothAvailable());
+    handleIpc('bluetooth:is-scanning', () => bluetoothManager.isScanning());
+    handleIpc('bluetooth:get-connection-state', () => bluetoothManager.getConnectionState());
+    handleIpc('bluetooth:get-connected-device', () => bluetoothManager.getConnectedDevice());
+    handleIpc('bluetooth:get-devices', () => bluetoothManager.getDiscoveredDevices());
+    handleIpc('bluetooth:start-scan', () => bluetoothManager.startScanning());
+    handleIpc('bluetooth:stop-scan', () => bluetoothManager.stopScanning());
+    handleIpc('bluetooth:disconnect', () => bluetoothManager.disconnect());
+    handleIpc('bluetooth:connect', async (_event, deviceId: string) => {
         try {
             await bluetoothManager.connect(deviceId);
             return { ok: true } as const;
@@ -167,11 +185,17 @@ function registerBluetoothIpc() {
     bluetoothManager.on('scanStateChanged', (scanning: boolean) => {
         mainWindow?.webContents.send('bluetooth:scan-state-changed', scanning);
     });
+    bluetoothManager.on('availabilityChanged', (available: boolean) => {
+        mainWindow?.webContents.send('bluetooth:availability-changed', available);
+    });
+    bluetoothManager.on('connectionError', (message: string) => {
+        mainWindow?.webContents.send('bluetooth:connection-error', message);
+    });
     bluetoothManager.on('connectionStateChanged', (state: ConnectionState, device: BluetoothDevice | null) => {
         // Without a connected dongle, forwarded input goes nowhere while the
         // key blocker still swallows local keystrokes - the keyboard would be
         // dead on both machines. Hand control back to the local machine.
-        if (state === 'disconnected' && monitoringActive) {
+        if (state !== 'connected' && monitoringActive) {
             setMonitoring(false);
         } else {
             // Arm/disarm the edge watcher with the connection.
@@ -183,9 +207,9 @@ function registerBluetoothIpc() {
 
 
 function registerSettingsIpc() {
-    ipcMain.handle('settings:get', () => settingsStore.get());
+    handleIpc('settings:get', () => settingsStore.get());
 
-    ipcMain.handle('settings:set-forwarding', (_event, patch: Partial<Pick<AppSettings, 'forwardKeyboard' | 'forwardMouse'>>) => {
+    handleIpc('settings:set-forwarding', (_event, patch: Partial<Pick<AppSettings, 'forwardKeyboard' | 'forwardMouse'>>) => {
         const sanitized: Partial<AppSettings> = {};
         if (typeof patch?.forwardKeyboard === 'boolean') sanitized.forwardKeyboard = patch.forwardKeyboard;
         if (typeof patch?.forwardMouse === 'boolean') sanitized.forwardMouse = patch.forwardMouse;
@@ -194,7 +218,7 @@ function registerSettingsIpc() {
         return settings;
     });
 
-    ipcMain.handle('settings:set-switching', (_event, patch: Partial<Pick<AppSettings, 'dynamicSwitch' | 'pc2Layout' | 'mouseMode'>>) => {
+    handleIpc('settings:set-switching', (_event, patch: Partial<Pick<AppSettings, 'dynamicSwitch' | 'pc2Layout' | 'mouseMode'>>) => {
         const sanitized: Partial<AppSettings> = {};
         if (typeof patch?.dynamicSwitch === 'boolean') sanitized.dynamicSwitch = patch.dynamicSwitch;
         // Rebuilt field by field - never trust the renderer's object shape.
@@ -208,6 +232,9 @@ function registerSettingsIpc() {
             };
         }
         if (patch?.mouseMode === 'absolute' || patch?.mouseMode === 'relative') sanitized.mouseMode = patch.mouseMode;
+        // Apply mode/layout changes from a clean input state, so the monitor
+        // and overlay cannot keep using the previous mode or return edge.
+        if (monitoringActive) setMonitoring(false);
         const settings = settingsStore.update(sanitized);
         syncMonitors();
         return settings;
@@ -217,20 +244,23 @@ function registerSettingsIpc() {
     // suspended so pressing it gets captured instead of toggling monitors.
     // The key blocker is suspended too, or the recorder window would never
     // receive the keystrokes being recorded.
-    ipcMain.handle('keybind:begin-capture', () => {
-        localKeyBlocker.stop();
+    handleIpc('keybind:begin-capture', () => {
+        keybindCaptureActive = true;
+        setMonitoring(false);
         globalShortcut.unregister(settingsStore.get().switchKeybind);
     });
-    ipcMain.handle('keybind:cancel-capture', () => {
+    handleIpc('keybind:cancel-capture', () => {
+        keybindCaptureActive = false;
         registerSwitchKeybind(settingsStore.get().switchKeybind);
         syncMonitors();
     });
 
-    ipcMain.handle('keybind:set', (_event, accelerator: string) => {
+    handleIpc('keybind:set', (_event, accelerator: string) => {
         if (typeof accelerator !== 'string' || !ACCELERATOR_PATTERN.test(accelerator)) {
             return { ok: false, error: `"${accelerator}" is not a valid shortcut.` } as const;
         }
         const previous = settingsStore.get().switchKeybind;
+        keybindCaptureActive = false;
         // Release blanket-registered combos so the new accelerator is free to
         // be registered as the switch keybind; syncMonitors() re-blocks with
         // the new exclusion afterwards.
@@ -246,8 +276,8 @@ function registerSettingsIpc() {
         return { ok: false, error: `Could not register "${accelerator}" - it may be in use by another app.` } as const;
     });
 
-    ipcMain.handle('monitor:get-state', () => monitoringActive);
-    ipcMain.handle('monitor:set-state', (_event, active: boolean) => {
+    handleIpc('monitor:get-state', () => monitoringActive);
+    handleIpc('monitor:set-state', (_event, active: boolean) => {
         setMonitoring(Boolean(active));
         return monitoringActive;
     });
@@ -278,12 +308,15 @@ app.on('ready', async () => {
         console.log('Registration failed. Maybe another app is using this combo?');
     }
 
-    keyMonitor.on('hid-report', async (report: Buffer) => {
-        await bluetoothManager.sendHidReport(report);
+    keyMonitor.on('stalled', () => setMonitoring(false));
+    mouseMonitor.on('stalled', () => setMonitoring(false));
+
+    keyMonitor.on('hid-report', (report: Buffer) => {
+        bluetoothManager.sendHidReport(report);
     })
 
-    mouseMonitor.on('hid-report', async (report: Buffer) => {
-        await bluetoothManager.sendHidReport(report, true);
+    mouseMonitor.on('hid-report', (report: Buffer, kind: ReportKind) => {
+        bluetoothManager.sendHidReport(report, kind);
     })
 
     // Cursor thrown at the edge facing PC2 - seed the virtual cursor where it
@@ -295,13 +328,11 @@ app.on('ready', async () => {
         setMonitoring(true);
     })
 
-    // Raw movement deltas from the pointer-locked overlay. This coexists with the
-    // uiohook path instead of replacing it: while the lock holds, the real cursor
-    // is frozen so uiohook-derived deltas are zero, and when the lock could not be
-    // acquired the overlay sends nothing - either way nothing is counted twice.
+    // The lock event explicitly selects the delta source to avoid double counting.
     captureOverlay.onDelta((dx, dy) => mouseMonitor.applyDelta(dx, dy));
 
     captureOverlay.on('lock-changed', (locked: boolean) => {
+        mouseMonitor.setPointerLocked(locked);
         console.log(`Capture overlay pointer lock: ${locked ? 'acquired' : 'released'}`);
     });
 

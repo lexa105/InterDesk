@@ -82,23 +82,27 @@ bool USBHIDAbsMouse::sendReport(uint8_t buttons, uint16_t x, uint16_t y, int8_t 
   if (x > ABS_MOUSE_MAX) x = ABS_MOUSE_MAX;
   if (y > ABS_MOUSE_MAX) y = ABS_MOUSE_MAX;
 
-  _buttons = buttons & ABS_MOUSE_ALL;
-  _x = x;
-  _y = y;
+  const uint8_t nextButtons = buttons & ABS_MOUSE_ALL;
 
   // The wire format is little-endian and so is the ESP32-S3, so the packed
   // struct can go out as-is.
   abs_mouse_report_t report = {
-    .buttons = _buttons,
-    .x = _x,
-    .y = _y,
+    .buttons = nextButtons,
+    .x = x,
+    .y = y,
     .wheel = wheel
   };
-  return hid.SendReport(USB_ABS_MOUSE_REPORT_ID, &report, sizeof(report));
+  _deliveryUncertain = true;
+  if (!hid.SendReport(USB_ABS_MOUSE_REPORT_ID, &report, sizeof(report), 10)) return false;
+  _deliveryUncertain = false;
+  _buttons = nextButtons;
+  _x = x;
+  _y = y;
+  return true;
 }
 
 bool USBHIDAbsMouse::releaseAll() {
-  if (_buttons == 0) {
+  if (_buttons == 0 && !_deliveryUncertain) {
     return true;
   }
   return sendReport(0, _x, _y, 0);

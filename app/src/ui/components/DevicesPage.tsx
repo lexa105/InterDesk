@@ -40,13 +40,15 @@ export function DevicesPage({
         <div>
           <h2 className="text-xl font-semibold tracking-tight text-ink">Devices</h2>
           <p className="mt-1 text-[13px] text-ink-dim">
-            Scan for an InterDesk dongle nearby and connect to start forwarding input.
+            First connection: hold the dongle button for 2 seconds and release, then scan and connect.
+            Enter the six-digit code shown on the dongle in the system Bluetooth dialog.
+            Paired laptops can reconnect without a code.
           </p>
         </div>
         <button
           type="button"
           onClick={onToggleScan}
-          disabled={available === false}
+          disabled={available !== true || connectionState === 'connecting'}
           className={`shrink-0 rounded-md border px-3.5 py-1.5 text-[13px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
             scanning
               ? 'border-line bg-surface-2 text-ink hover:border-ink-faint'

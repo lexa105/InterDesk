@@ -2,6 +2,8 @@ import { BrowserWindow, ipcMain, session, type Display } from 'electron';
 import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { performance } from 'node:perf_hooks';
+import { MAX_INPUT_AGE_MS } from './hid-transport.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -121,8 +123,10 @@ class CaptureOverlay extends EventEmitter {
         if (this.ipcBound) return;
         this.ipcBound = true;
 
-        ipcMain.on('overlay:delta', (event, dx: number, dy: number) => {
-            if (!this.isOwn(event.sender)) return;
+        ipcMain.on('overlay:delta', (event, dx: number, dy: number, capturedAt: number) => {
+            if (!this.isOwn(event.sender) || !this.locked) return;
+            const age = performance.timeOrigin + performance.now() - capturedAt;
+            if (!Number.isFinite(age) || age < -10 || age > MAX_INPUT_AGE_MS) return;
             if (!Number.isFinite(dx) || !Number.isFinite(dy)) return;
             this.emit('delta', dx, dy);
         });

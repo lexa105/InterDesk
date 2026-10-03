@@ -7,11 +7,6 @@
 
 #pragma once
 
-struct UiState {
-    char debug[96];
-    bool AirDropOn;
-};
-
 class Display
 {
 private:

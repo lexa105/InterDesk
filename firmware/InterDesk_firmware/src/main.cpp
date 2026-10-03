@@ -1,277 +1,159 @@
 #include <Arduino.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
-#include "ble/ble_server.h"
-
 #include "freertos/task.h"
-#include "freertos/event_groups.h"
-#include "freertos/semphr.h"
+#include "ble/ble_server.h"
 #include "display.h"
-
-#define PIN_BTN1 0
-
 #include "USB.h"
 #include "USBHIDMouse.h"
 #include "USBHIDKeyboard.h"
 #include "usb/abs_mouse.h"
 
-static QueueHandle_t bleRxQ;
-static BleServer* ble = nullptr;
+namespace {
+constexpr uint8_t BUTTON_PIN = 0;
+constexpr uint32_t BUTTON_DEBOUNCE_MS = 25;
+constexpr uint32_t PAIR_HOLD_MS = 2000;
+constexpr uint32_t FORGET_HOLD_MS = 8000;
+constexpr UBaseType_t INPUT_QUEUE_LENGTH = 16;
 
-static TaskHandle_t decoderTaskHandle = nullptr;
-static TaskHandle_t displayTaskHandle = nullptr;
-static TaskHandle_t buttonTaskHandle = nullptr;
-
-void startTasks();
-void DecoderTask(void*);
-void DisplayTask(void*);
-void ButtonTask(void*);
-
-
-UiState gUi; //mutexed global instance 
-SemaphoreHandle_t uiMtx;
-EventGroupHandle_t uiEv;
-enum : EventBits_t {
-  UI_EV_STATE  = (1 << 0),
-  UI_EV_DEBUG  = (1 << 1),
-  UI_EV_ALL    = UI_EV_STATE | UI_EV_DEBUG
-};
-
+QueueHandle_t inputQueue;
+BleServer* ble = nullptr;
 USBHIDKeyboard keyboard;
 USBHIDMouse mouse;
 USBHIDAbsMouse absMouse;
+USBHID hid;
+// Keep USB stalls bounded too; one combined relative report per BLE packet.
+constexpr uint32_t USB_REPORT_TIMEOUT_MS = 10;
 
-bool hid_decode(const BlePacket& pkt);
-static void hid_release_all();
-static void ui_set_debug(const char* s);
-static void ui_toggle_airdrop();
+bool releaseAll() {
+    if (!hid.ready()) return false;
+    const uint8_t keyboardReport[8] = {};
+    const hid_mouse_report_t mouseReport = {};
+    const bool keyboardReleased = hid.SendReport(HID_REPORT_ID_KEYBOARD, keyboardReport, sizeof(keyboardReport), USB_REPORT_TIMEOUT_MS);
+    const bool mouseReleased = hid.SendReport(HID_REPORT_ID_MOUSE, &mouseReport, sizeof(mouseReport), USB_REPORT_TIMEOUT_MS);
+    const bool absoluteReleased = absMouse.releaseAll();
+    return keyboardReleased && mouseReleased && absoluteReleased;
+}
 
-static uint8_t hidMouseButtons = 0;
+bool decodeHid(const BlePacket& packet) {
+    if (packet.len == 8) {
+        return hid.SendReport(HID_REPORT_ID_KEYBOARD, packet.data, 8, USB_REPORT_TIMEOUT_MS);
+    }
+    if (packet.len == 4) {
+        const hid_mouse_report_t report = {
+            .buttons = static_cast<uint8_t>(packet.data[0] & MOUSE_ALL),
+            .x = static_cast<int8_t>(packet.data[1]),
+            .y = static_cast<int8_t>(packet.data[2]),
+            .wheel = static_cast<int8_t>(packet.data[3]),
+            .pan = 0,
+        };
+        return hid.SendReport(HID_REPORT_ID_MOUSE, &report, sizeof(report), USB_REPORT_TIMEOUT_MS);
+    }
+    if (packet.len == 6) {
+        const uint16_t x = packet.data[1] | (static_cast<uint16_t>(packet.data[2]) << 8);
+        const uint16_t y = packet.data[3] | (static_cast<uint16_t>(packet.data[4]) << 8);
+        return absMouse.sendReport(packet.data[0], x, y, static_cast<int8_t>(packet.data[5]));
+    }
+    return false;
+}
 
+void decoderTask(void*) {
+    uint32_t generation = ble->generation();
+    bool releasePending = true;
+    for (;;) {
+        BlePacket packet{};
+        const bool received = xQueueReceive(inputQueue, &packet, pdMS_TO_TICKS(10)) == pdTRUE;
+        const auto currentGeneration = ble->generation();
+        if (generation != currentGeneration) {
+            releasePending = true;
+            generation = currentGeneration;
+        }
+        if (received && packet.generation == generation && packet.type == BlePacketType::Reset) {
+            releasePending = true;
+        }
+        // USB may be suspended while BLE disconnects. Retry releases on wake;
+        // never forget a failed release and leave the host with a held control.
+        if (releasePending) {
+            releasePending = !releaseAll();
+            if (releasePending) {
+                if (received && packet.type == BlePacketType::HidReport) ble->failLink();
+                continue;
+            }
+        }
+        if (!received || packet.generation != generation || packet.type == BlePacketType::Reset) continue;
+        if (!ble->authorized()) continue;
+        if (millis() - packet.receivedAt > MAX_INPUT_AGE_MS || !decodeHid(packet)) {
+            // A blocked USB host must not cause a burst of old movement/typing.
+            ble->failLink();
+            releasePending = true;
+        }
+    }
+}
+
+#ifdef HAS_TFT
+void displayTask(void*) {
+    Display display;
+    display.display_init();
+    char previous[40] = "";
+    for (;;) {
+        char status[40];
+        if (ble->pairingOpen()) {
+            snprintf(status, sizeof(status), "PAIR: %06lu", static_cast<unsigned long>(ble->pairingPasskey()));
+        } else {
+            snprintf(status, sizeof(status), "%s", ble->authorized() ? "CONNECTED" : "HOLD 2s TO PAIR");
+        }
+        if (strcmp(previous, status) != 0) {
+            display.display_show_state(status);
+            strcpy(previous, status);
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+}
+#endif
+
+void pollButton() {
+    static bool lastRead = HIGH;
+    static bool stableRead = HIGH;
+    static uint32_t changedAt = 0;
+    static uint32_t pressedAt = 0;
+    const bool read = digitalRead(BUTTON_PIN);
+    const uint32_t now = millis();
+    if (read != lastRead) {
+        lastRead = read;
+        changedAt = now;
+    }
+    if (now - changedAt < BUTTON_DEBOUNCE_MS || read == stableRead) return;
+    stableRead = read;
+    if (read == LOW) pressedAt = now;
+    else if (now - pressedAt >= PAIR_HOLD_MS) {
+        // Act on release so an eight-second hold never briefly opens pairing
+        // before the old trust records are erased.
+        ble->openPairingWindow(now - pressedAt >= FORGET_HOLD_MS);
+    }
+}
+} // namespace
 
 void setup() {
-  Serial.begin(115200);
-  
-  //Create BLE recieved queue
-  bleRxQ = xQueueCreate(16, sizeof(BlePacket));
-
-  // start BLE
-  ble = new BleServer(bleRxQ);
-  ble->start();
-
-  gUi.AirDropOn = false;
-
-  keyboard.begin();
-  mouse.begin();
-  absMouse.begin();
-  USB.begin();
-
-  //start decoder task
-  startTasks();
-    
-}
-
-void startTasks() {
-  uiMtx = xSemaphoreCreateMutex();
-  uiEv  = xEventGroupCreate();
-
-  xTaskCreatePinnedToCore(
-    DecoderTask,        // task function
-    "decoder",          // name
-    6144,               // stack bytes (start with 6 KB)
-    nullptr,            // param
-    18,                 // priority (higher than UI, lower than GPIO)
-    &decoderTaskHandle, // handle (optional)
-    1                   // core: 0 or 1
-  );
-
-  xTaskCreatePinnedToCore(
-    DisplayTask,
-    "display",
-    6144,     // display libs often need stack
-    nullptr,
-    5,        // low priority
-    &displayTaskHandle,
-    1         // core 1
-  );
-
-  xTaskCreatePinnedToCore(
-  ButtonTask,        // task function
-  "button",
-  2048,              // stack (small task)
-  nullptr,           // param
-  8,                 // priority (below decoder, above idle)
-  &buttonTaskHandle, // handle (optional)
-  1                  // core 1
-  );
-}
-
-
-void DecoderTask(void*) {
-  BlePacket pkt;
-  static uint32_t last = 0;
-  for (;;) {
-    if (xQueueReceive(bleRxQ, &pkt, portMAX_DELAY) == pdTRUE) {
-      if (pkt.type == BlePacketType::Disconnected) {
-        hid_release_all();
-      } else if (!hid_decode(pkt)) {
-        ui_set_debug("HID BAD");
-      }
-    }
-
-    //
-    if (millis() - last > 5000) {
-      last = millis();
-      Serial.printf("Decoder stack HW=%u\n", uxTaskGetStackHighWaterMark(nullptr));
-    }
-
-  }
-}
-
-//DisplayTask and modes
-void DisplayTask(void* arg) {
-  Display disp;
-  disp.display_init();
-
-  //struct with all display data
-  UiState snap;
-
-  for (;;) {
-    // Wait until something changes OR timeout for periodic refresh
-    EventBits_t bits = xEventGroupWaitBits(
-      uiEv,
-      UI_EV_ALL,
-      pdTRUE,     // clear bits on exit
-      pdFALSE,    // wait for any bit
-      pdMS_TO_TICKS(1000) // periodic refresh every 1s (set to portMAX_DELAY to be pure event-driven)
-    );
-
-    // Snapshot state quickly
-    xSemaphoreTake(uiMtx, portMAX_DELAY);
-    snap = gUi;
-    xSemaphoreGive(uiMtx);
-
-    // Render only what changed (if timeout, bits==0 => you choose what to refresh)
-    if (bits & UI_EV_STATE) {
-        if (snap.AirDropOn) {
-          disp.display_show_state("AIRDROP ON");
-          ble->soft_stop(true);
-        } else {
-          disp.display_show_state("AIRDROP OFF");
-          ble->resume();
-        }
-      }
-    if (bits & UI_EV_DEBUG) disp.display_show_debug(snap.debug);
-  }
-}
-
-void ButtonTask(void*) {
-  pinMode(PIN_BTN1, INPUT_PULLUP);
-
-  const TickType_t period = pdMS_TO_TICKS(5); //5ms to tick
-  const uint32_t debounce_ms = 25;
-  const uint32_t long_press = 500;
-
-  bool lastRead = digitalRead(PIN_BTN1);
-  bool stableRead   = lastRead;
-  uint32_t lastChangeMs = millis();
-  uint32_t lastStableLow = millis();
-
-  for (;;) {
-    vTaskDelay(period);
-
-    bool read = digitalRead(PIN_BTN1);
-    uint32_t now = millis();
-
-    if (read != lastRead) {
-      lastRead = read;
-      lastChangeMs = now;
-    }
-
-    if ((now - lastChangeMs) >= debounce_ms && read != stableRead) {
-      stableRead = read;
-
-      if (stableRead == LOW) {
-        lastStableLow = now;
-      } else if (now - lastStableLow >= long_press) {
-        ui_toggle_airdrop();
-      }
-    }
-  }
+    Serial.begin(115200);
+    pinMode(BUTTON_PIN, INPUT_PULLUP);
+    inputQueue = xQueueCreate(INPUT_QUEUE_LENGTH, sizeof(BlePacket));
+    configASSERT(inputQueue);
+    keyboard.begin();
+    mouse.begin();
+    absMouse.begin();
+    USB.begin();
+    ble = new BleServer(inputQueue);
+    ble->start();
+    const auto decoderCreated = xTaskCreatePinnedToCore(decoderTask, "input", 6144, nullptr, 18, nullptr, 1);
+    configASSERT(decoderCreated == pdPASS);
+#ifdef HAS_TFT
+    const auto displayCreated = xTaskCreatePinnedToCore(displayTask, "display", 4096, nullptr, 5, nullptr, 1);
+    configASSERT(displayCreated == pdPASS);
+#endif
 }
 
 void loop() {
-}
-
-bool hid_decode(const BlePacket& pkt){
-  // Standard 8-byte keyboard report.
-  if (pkt.len == 8) {
-    keyboard.sendReport((KeyReport*)pkt.data);
-    return true;
-  }
-
-  // 4-byte relative mouse report: [buttons, dx (int8), dy (int8), wheel (int8)]
-  // Sent by MouseMonitor on the Electron side. Buttons bitmask matches USBHIDMouse's
-  // MOUSE_LEFT/MOUSE_RIGHT/MOUSE_MIDDLE, so it can be passed straight to press()/release().
-  if (pkt.len == 4) {
-    uint8_t buttons = pkt.data[0] & MOUSE_ALL;
-    int8_t dx = static_cast<int8_t>(pkt.data[1]);
-    int8_t dy = static_cast<int8_t>(pkt.data[2]);
-    int8_t wheel = static_cast<int8_t>(pkt.data[3]);
-
-    uint8_t pressed = buttons & ~hidMouseButtons;
-    uint8_t released = ~buttons & hidMouseButtons;
-    if (pressed) mouse.press(pressed);
-    if (released) mouse.release(released);
-    hidMouseButtons = buttons;
-
-    if (dx != 0 || dy != 0 || wheel != 0) {
-      mouse.move(dx, dy, wheel);
-    }
-    return true;
-  }
-
-  // 6-byte absolute mouse report:
-  //   [0]    buttons bitmask (bit0 left, bit1 right, bit2 middle)
-  //   [1..2] x, uint16 little-endian, 0..32767
-  //   [3..4] y, uint16 little-endian, 0..32767
-  //   [5]    wheel (int8, relative)
-  // Position is in the DeskHop-style virtual 0..32767 space; the host maps it to
-  // the full screen. Clamping happens in USBHIDAbsMouse::sendReport().
-  if (pkt.len == 6) {
-    uint8_t buttons = pkt.data[0] & ABS_MOUSE_ALL;
-    uint16_t x = static_cast<uint16_t>(pkt.data[1]) | (static_cast<uint16_t>(pkt.data[2]) << 8);
-    uint16_t y = static_cast<uint16_t>(pkt.data[3]) | (static_cast<uint16_t>(pkt.data[4]) << 8);
-    int8_t wheel = static_cast<int8_t>(pkt.data[5]);
-
-    absMouse.sendReport(buttons, x, y, wheel);
-    return true;
-  }
-
-  return false;
-}
-
-static void hid_release_all() {
-  keyboard.releaseAll();
-  mouse.release(MOUSE_ALL);
-  hidMouseButtons = 0;
-  absMouse.releaseAll();
-  Serial.println("USB HID state cleared after BLE disconnect");
-}
-
-static void ui_set_debug(const char* s) {
-  xSemaphoreTake(uiMtx, portMAX_DELAY);
-  strncpy(gUi.debug, s, sizeof(gUi.debug)-1);
-  gUi.debug[sizeof(gUi.debug)-1] = '\0';
-  xSemaphoreGive(uiMtx);
-
-  xEventGroupSetBits(uiEv, UI_EV_DEBUG);
-}
-
-static void ui_toggle_airdrop() {
-  xSemaphoreTake(uiMtx, portMAX_DELAY);
-  gUi.AirDropOn = !gUi.AirDropOn;
-  xSemaphoreGive(uiMtx);
-
-  xEventGroupSetBits(uiEv, UI_EV_STATE);
+    ble->poll();
+    pollButton();
+    delay(5);
 }

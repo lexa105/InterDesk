@@ -1,9 +1,10 @@
 {
   "appId": "com.lexatuan.interdesk",
-  "productName": "InterDesk", 
-  "files": ["dist-electron", "dist-react"],
-  "extraResources": ["dist-electron/preload.cjs", "src/assets/**"],
-  "icon": "./desktopIcon.png",
+  "productName": "InterDesk",
+  "files": [
+    "dist-electron",
+    "dist-react"
+  ],
   "mac": {
     "target": "dmg"
   },
@@ -12,6 +13,9 @@
     "category": "Utility"
   },
   "win": {
-    "target": ["portable", "msi"]
+    "target": [
+      "portable",
+      "msi"
+    ]
   }
 }

@@ -1,8 +1,9 @@
 import { uIOhook, UiohookKey } from "uiohook-napi";
 import { EventEmitter } from 'node:events';
-import { acquireUiohook, releaseUiohook } from './uiohook-lifecycle.js';
+import { parseSwitchShortcut, shortcutModifiers } from './switch-shortcut.js';
+import { acquireUiohook, releaseUiohook, isFreshInput } from './uiohook-lifecycle.js';
 
-const MAC_HID_MAP: Record<number, number> = {
+const HID_KEY_MAP: Record<number, number> = {
     // Letters
     16: 0x14, 17: 0x1A, 18: 0x08, 19: 0x15, 20: 0x17, 21: 0x1C, 22: 0x18, 23: 0x0C, 24: 0x12, 25: 0x13,
     30: 0x04, 31: 0x16, 32: 0x07, 33: 0x09, 34: 0x0A, 35: 0x0B, 36: 0x0D, 37: 0x0E, 38: 0x0F,
@@ -48,8 +49,8 @@ const MAC_HID_MAP: Record<number, number> = {
     3639: 0x46, // PrintScreen
     70: 0x47,   // ScrollLock
     3653: 0x48, // Pause/Break
-    3666: 0x4C, // Delete
-    3667: 0x49, // Insert
+    [UiohookKey.Delete]: 0x4C, // Delete
+    [UiohookKey.Insert]: 0x49, // Insert
     3655: 0x4A, // Home
     3657: 0x4B, // PageUp
     3663: 0x4D, // End
@@ -72,13 +73,23 @@ const MAC_HID_MAP: Record<number, number> = {
     3676: 0xE7  // Right Meta
 }
 
+const MODIFIER_BITS: Readonly<Record<number, number>> = {
+    [UiohookKey.Ctrl]: 0x01, [UiohookKey.Shift]: 0x02,
+    [UiohookKey.Alt]: 0x04, [UiohookKey.Meta]: 0x08,
+    [UiohookKey.CtrlRight]: 0x10, [UiohookKey.ShiftRight]: 0x20,
+    [UiohookKey.AltRight]: 0x40, [UiohookKey.MetaRight]: 0x80,
+};
 
 export class KeyMonitor extends EventEmitter {
-    //TODO: Dopracovat zde architekturu z Electron strany a pak to prepsat do dokumentace v Notionu. 
-    
     // 2.state manegment - toto by se mělo měnit, podle stavu zmáčknutých kláves
     private currentModifiers = 0x00;
     private pressedKeys = new Set<number>();
+
+    private switchShortcut = parseSwitchShortcut('CommandOrControl+Shift+R');
+
+    public setSwitchKeybind(accelerator: string) {
+        this.switchShortcut = parseSwitchShortcut(accelerator);
+    }
 
     //Track if we are monitoring.
     private _isRunning = false;
@@ -89,16 +100,23 @@ export class KeyMonitor extends EventEmitter {
 
 
 
-
     constructor() {
         super();
 
         // Initialize uiohook
         uIOhook.on('keydown', (e) => {
+            if (!isFreshInput(e)) {
+                if (this._isRunning) this.emit('stalled');
+                return;
+            }
             this.handleKeyEvent(e.keycode, true);
         });
 
         uIOhook.on('keyup', (e) => {
+            if (!isFreshInput(e)) {
+                if (this._isRunning) this.emit('stalled');
+                return;
+            }
             this.handleKeyEvent(e.keycode, false)
         })
     }
@@ -111,7 +129,6 @@ export class KeyMonitor extends EventEmitter {
 
     public stop() {
         if (!this._isRunning) return;
-        console.log("Stopping KeyMonitor");
         this._isRunning = false;
         releaseUiohook();
 
@@ -120,7 +137,7 @@ export class KeyMonitor extends EventEmitter {
         this.pressedKeys.clear();
 
         //Sending bluetooth default empty buffer.
-        this.sendReport()
+        this.sendReport();
 
     }
 
@@ -131,18 +148,29 @@ export class KeyMonitor extends EventEmitter {
         // events unless keyboard forwarding itself is on.
         if (!this._isRunning) return;
 
+        // The native hook runs before Electron's global shortcut callback.
+        // Suppress the trigger key so switching home cannot also run a PC2 shortcut.
+        if (isDown && this.switchShortcut?.keycode === uiHookKeycode &&
+            this.switchShortcut.modifiers === shortcutModifiers(this.currentModifiers)) {
+            this.currentModifiers = 0;
+            this.pressedKeys.clear();
+            this.sendReport();
+            return;
+        }
+
         let changed = false;
 
-        if(this.isModifier(uiHookKeycode)) {
+        const modifierBit = MODIFIER_BITS[uiHookKeycode];
+        if (modifierBit) {
             const oldModifiers = this.currentModifiers;
-            this.updateModifier(uiHookKeycode, isDown);
+            if (isDown) this.currentModifiers |= modifierBit;
+            else this.currentModifiers &= ~modifierBit;
             if (this.currentModifiers !== oldModifiers) {
                 changed = true;
             }
         } else {
-            const hidCode = MAC_HID_MAP[uiHookKeycode];
+            const hidCode = HID_KEY_MAP[uiHookKeycode];
             if (!hidCode) {
-                console.log("unmapped keycode key ", uiHookKeycode);
                 return;
             } 
 
@@ -171,55 +199,20 @@ export class KeyMonitor extends EventEmitter {
         //byte 0 is for modifiers. 
         report[0] = this.currentModifiers;
         //Byte 1 stays 0
-        let i= 2;
+        // USB boot-keyboard ErrorRollOver instead of silently dropping held keys.
+        if (this.pressedKeys.size > 6) {
+            report.fill(0x01, 2);
+            this.emit('hid-report', report);
+            return;
+        }
+        let i = 2;
         for (const hid of this.pressedKeys) {
             if (i >= 8) break;
             report[i] = hid;
             i++;
         }
 
-        console.log('Sending HID report to BLE: ', report)
-        // ZDE PRIDAT BLESENDREPORT
-        //TODO: PRIDAT pomoci Observer design patternu.
-        this.emit('hid-report', report)
+        this.emit('hid-report', report);
     }
-
-
-    private isModifier(keycode: number): boolean {
-        const modifiers = [
-            UiohookKey.Ctrl, 
-            UiohookKey.CtrlRight, 
-            UiohookKey.Shift, 
-            UiohookKey.ShiftRight, 
-            UiohookKey.Alt, 
-            UiohookKey.AltRight, 
-            UiohookKey.Meta,
-            UiohookKey.MetaRight
-        ]
-        //Checkne jestli je to modifier.
-        // @ts-ignore
-        return modifiers.includes(keycode)
-    }
-
-    private updateModifier(keycode: number, isDown: boolean) {
-        let modifierBit = 0;
-        switch(keycode) {
-            case UiohookKey.Ctrl:       modifierBit = 0x01; break;
-            case UiohookKey.Shift:      modifierBit = 0x02; break;
-            case UiohookKey.Alt:        modifierBit = 0x04; break;
-            case UiohookKey.Meta:       modifierBit = 0x08; break; // Left Cmd
-            case UiohookKey.CtrlRight:  modifierBit = 0x10; break;
-            case UiohookKey.ShiftRight: modifierBit = 0x20; break;
-            case UiohookKey.AltRight:   modifierBit = 0x40; break;
-            case UiohookKey.MetaRight:  modifierBit = 0x80; break; // Right Cmd
-        }
-
-        if (isDown) {
-            this.currentModifiers |= modifierBit
-        } else {
-            this.currentModifiers &= ~modifierBit
-        }
-    }
-
 
 }

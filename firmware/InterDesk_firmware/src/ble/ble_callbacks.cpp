@@ -1,56 +1,35 @@
 #include "ble_callbacks.h"
 #include "ble_server.h"
-#include <NimBLEDevice.h>
-#include <algorithm>
 
-namespace {
-constexpr uint16_t CONN_INTERVAL_MIN = 6;  // 7.5 ms
-constexpr uint16_t CONN_INTERVAL_MAX = 12; // 15 ms
-constexpr uint16_t CONN_LATENCY = 0;
-constexpr uint16_t CONN_TIMEOUT = 200;     // 2 seconds
+void ServerCallbacks::onConnect(NimBLEServer* server, NimBLEConnInfo& info) {
+    if (!_owner.handleConnected(info)) return;
+    // 7.5..15 ms interval, no slave latency, 2-second link supervision timeout.
+    server->updateConnParams(info.getConnHandle(), 6, 12, 0, 200);
 }
 
-void ServerCallbacks::onConnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo) {
-    Serial.printf("Client address: %s\n", connInfo.getAddress().toString().c_str());
-    _owner.setConnected(connInfo.getConnHandle());
-
-    pServer->updateConnParams(
-        connInfo.getConnHandle(),
-        CONN_INTERVAL_MIN,
-        CONN_INTERVAL_MAX,
-        CONN_LATENCY,
-        CONN_TIMEOUT
-    );
+void ServerCallbacks::onDisconnect(NimBLEServer*, NimBLEConnInfo& info, int) {
+    _owner.handleDisconnected(info.getConnHandle());
 }
 
-void ServerCallbacks::onDisconnect(NimBLEServer*, NimBLEConnInfo&, int) {
-    Serial.println("Client disconnected");
-    _owner.handleDisconnected();
-
-    if (_owner.advEnabled()) {
-        NimBLEDevice::startAdvertising();
-    } else {
-        Serial.println("Advertising suppressed (soft stop)");
-    }
+void ServerCallbacks::onAuthenticationComplete(NimBLEConnInfo& info) {
+    _owner.handleAuthenticated(info);
 }
 
-void ServerCallbacks::onMTUChange(uint16_t mtu, NimBLEConnInfo& connInfo) {
-    Serial.printf("MTU updated: %u for connection ID: %u\n", mtu, connInfo.getConnHandle());
+uint32_t ServerCallbacks::onPassKeyDisplay() { return _owner.displayPasskey(); }
+
+void CharacteristicDataCallbacks::onWrite(NimBLECharacteristic* chr, NimBLEConnInfo& info) {
+    if (!_owner.canAcceptInput(info)) return;
+    const auto value = chr->getValue();
+    _owner.receive(value.data(), value.size(), false);
 }
 
-void CharacteristicDataCallbacks::onWrite(
-    NimBLECharacteristic* characteristic,
-    NimBLEConnInfo&
-) {
-    const std::string value = characteristic->getValue();
-    if (value.empty()) return;
+void CharacteristicControlCallbacks::onRead(NimBLECharacteristic* chr, NimBLEConnInfo& info) {
+    const uint8_t version = _owner.canAcceptInput(info) ? PROTOCOL_VERSION : 0;
+    chr->setValue(&version, 1);
+}
 
-    BlePacket packet{};
-    packet.type = BlePacketType::HidReport;
-    packet.len = static_cast<uint16_t>(std::min(value.size(), BLE_MAX_PAYLOAD));
-    memcpy(packet.data, value.data(), packet.len);
-
-    if (xQueueSend(_q, &packet, 0) != pdTRUE) {
-        Serial.println("BLE HID queue full; report dropped");
-    }
+void CharacteristicControlCallbacks::onWrite(NimBLECharacteristic* chr, NimBLEConnInfo& info) {
+    if (!_owner.canAcceptInput(info)) return;
+    const auto value = chr->getValue();
+    _owner.receive(value.data(), value.size(), true);
 }

@@ -14,7 +14,9 @@
     "transpile:electron": "tsc --project src/electron/tsconfig.json && tsc --project src/electron/preload/tsconfig.json",
     "dist:mac": "npm run transpile:electron && npm run build && electron-builder --mac --arm64",
     "dist:win": "npm run transpile:electron && npm run build && electron-builder --win --x64",
-    "dist:linux": "npm run transpile:electron && npm run build && electron-builder --linux --x64"
+    "dist:linux": "npm run transpile:electron && npm run build && electron-builder --linux --x64",
+    "test": "npm run transpile:electron && node --test test/*.test.mjs",
+    "check": "npm run lint && npm run test && npm run build"
   },
   "dependencies": {
     "@stoprocent/noble": "^2.3.10",

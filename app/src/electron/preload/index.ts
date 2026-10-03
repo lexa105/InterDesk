@@ -1,35 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
-// Kept in sync by hand with the equivalent types in ../bluetooth-manager.ts
-// and ../settings-store.ts. Duplicated (rather than imported) so this file's
-// CommonJS build - required by Electron's sandboxed preload loader - never
-// pulls in the ESM-only main process modules (noble, etc.) via rootDir
-// inference.
-export interface BluetoothDevice {
-    id: string;
-    name: string;
-    rssi: number;
-    connectable: boolean;
-}
-
-export type ConnectionState = 'disconnected' | 'connecting' | 'connected';
-
-export type Pc2Side = 'left' | 'right' | 'top' | 'bottom';
-
-export interface Pc2Layout {
-    side: Pc2Side;
-    offset: number;
-    scale: number;
-}
-
-export interface AppSettings {
-    switchKeybind: string;
-    forwardKeyboard: boolean;
-    forwardMouse: boolean;
-    dynamicSwitch: boolean;
-    pc2Layout: Pc2Layout;
-    mouseMode: 'absolute' | 'relative';
-}
+import type { BluetoothDevice, ConnectionState, AppSettings, BkmdApi } from '../../shared/contracts';
 
 function subscribe<T extends unknown[]>(channel: string, callback: (...args: T) => void) {
     const listener = (_event: Electron.IpcRendererEvent, ...args: T) => callback(...args);
@@ -37,10 +8,11 @@ function subscribe<T extends unknown[]>(channel: string, callback: (...args: T) 
     return () => ipcRenderer.removeListener(channel, listener);
 }
 
-const bkmdApi = {
+const bkmdApi: BkmdApi = {
     isBluetoothAvailable: (): Promise<boolean> => ipcRenderer.invoke('bluetooth:is-available'),
     isScanning: (): Promise<boolean> => ipcRenderer.invoke('bluetooth:is-scanning'),
     getConnectionState: (): Promise<ConnectionState> => ipcRenderer.invoke('bluetooth:get-connection-state'),
+    getConnectedDevice: (): Promise<BluetoothDevice | null> => ipcRenderer.invoke('bluetooth:get-connected-device'),
     getDevices: (): Promise<BluetoothDevice[]> => ipcRenderer.invoke('bluetooth:get-devices'),
     startScan: (): Promise<void> => ipcRenderer.invoke('bluetooth:start-scan'),
     stopScan: (): Promise<void> => ipcRenderer.invoke('bluetooth:stop-scan'),
@@ -60,6 +32,10 @@ const bkmdApi = {
     getMonitorState: (): Promise<boolean> => ipcRenderer.invoke('monitor:get-state'),
     setMonitorState: (active: boolean): Promise<boolean> => ipcRenderer.invoke('monitor:set-state', active),
 
+    onAvailabilityChanged: (callback: (available: boolean) => void) =>
+        subscribe<[boolean]>('bluetooth:availability-changed', callback),
+    onConnectionError: (callback: (message: string) => void) =>
+        subscribe<[string]>('bluetooth:connection-error', callback),
     onDeviceDiscovered: (callback: (device: BluetoothDevice) => void) =>
         subscribe<[BluetoothDevice]>('bluetooth:device-discovered', callback),
     onScanStateChanged: (callback: (scanning: boolean) => void) =>
@@ -71,5 +47,3 @@ const bkmdApi = {
 };
 
 contextBridge.exposeInMainWorld('bkmd', bkmdApi);
-
-export type BkmdApi = typeof bkmdApi;

@@ -20,7 +20,7 @@ function reportLockState() {
 function requestLock() {
     if (document.pointerLockElement === document.body) return;
     try {
-        document.body.requestPointerLock();
+        Promise.resolve(document.body.requestPointerLock()).catch(reportLockState);
     } catch {
         // Not gesture-backed yet - main will synthesize a click and we retry
         // from the mousedown handler below.
@@ -67,8 +67,11 @@ window.addEventListener('DOMContentLoaded', () => {
     });
 
     document.addEventListener('mousemove', (e) => {
+        if (document.pointerLockElement !== document.body) return;
         if (e.movementX === 0 && e.movementY === 0) return;
-        ipcRenderer.send('overlay:delta', e.movementX, e.movementY);
+        const capturedAt = performance.timeOrigin + e.timeStamp;
+        if (performance.now() - e.timeStamp > 100) return;
+        ipcRenderer.send('overlay:delta', e.movementX, e.movementY, capturedAt);
     });
 
     // Buttons and wheel are deliberately NOT forwarded: uiohook already captures

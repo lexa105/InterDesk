@@ -27,7 +27,8 @@ function App() {
       window.bkmd.getDevices(),
       window.bkmd.getSettings(),
       window.bkmd.getMonitorState(),
-    ]).then(([isAvailable, isScanning, state, initialDevices, initialSettings, monitorState]) => {
+      window.bkmd.getConnectedDevice(),
+    ]).then(([isAvailable, isScanning, state, initialDevices, initialSettings, monitorState, device]) => {
       if (cancelled) return
       setAvailable(isAvailable)
       setScanning(isScanning)
@@ -35,6 +36,9 @@ function App() {
       setDevices(initialDevices)
       setSettings(initialSettings)
       setMonitoring(monitorState)
+      setConnectedDevice(device)
+    }).catch((error: unknown) => {
+      if (!cancelled) setError(error instanceof Error ? error.message : String(error))
     })
 
     const unsubscribeDiscovered = window.bkmd.onDeviceDiscovered((device) => {
@@ -56,6 +60,8 @@ function App() {
     })
 
     const unsubscribeMonitor = window.bkmd.onMonitorStateChanged(setMonitoring)
+    const unsubscribeAvailable = window.bkmd.onAvailabilityChanged(setAvailable)
+    const unsubscribeError = window.bkmd.onConnectionError(setError)
 
     return () => {
       cancelled = true
@@ -63,6 +69,8 @@ function App() {
       unsubscribeScan()
       unsubscribeConnection()
       unsubscribeMonitor()
+      unsubscribeAvailable()
+      unsubscribeError()
     }
   }, [])
 
@@ -77,27 +85,38 @@ function App() {
 
   const toggleScan = useCallback(async () => {
     setError(null)
-    if (scanning) {
-      await window.bkmd.stopScan()
-    } else {
-      setDevices([])
-      await window.bkmd.startScan()
+    try {
+      if (scanning) {
+        await window.bkmd.stopScan()
+      } else {
+        setDevices([])
+        await window.bkmd.startScan()
+      }
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error))
     }
   }, [scanning])
 
   const handleConnect = useCallback(async (deviceId: string) => {
     setError(null)
     setConnectingId(deviceId)
-    const result = await window.bkmd.connect(deviceId)
-    if (!result.ok) {
-      setError(result.error)
+    try {
+      const result = await window.bkmd.connect(deviceId)
+      if (!result.ok) setError(result.error)
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error))
+    } finally {
       setConnectingId(null)
     }
   }, [])
 
   const handleDisconnect = useCallback(async () => {
     setError(null)
-    await window.bkmd.disconnect()
+    try {
+      await window.bkmd.disconnect()
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error))
+    }
   }, [])
 
   return (

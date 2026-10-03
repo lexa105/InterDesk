@@ -1,50 +1,33 @@
-# React + TypeScript + Vite
+# InterDesk desktop app
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Electron, React and TypeScript frontend for the InterDesk USB HID dongle.
+Use Node **22.15+** for development and tests.
 
-Currently, two official plugins are available:
-
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react/README.md) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type aware lint rules:
-
-- Configure the top-level `parserOptions` property like this:
-
-```js
-export default tseslint.config({
-  languageOptions: {
-    // other options...
-    parserOptions: {
-      project: ['./tsconfig.node.json', './tsconfig.app.json'],
-      tsconfigRootDir: import.meta.dirname,
-    },
-  },
-})
+```sh
+npm ci
+npm run dev
 ```
 
-- Replace `tseslint.configs.recommended` to `tseslint.configs.recommendedTypeChecked` or `tseslint.configs.strictTypeChecked`
-- Optionally add `...tseslint.configs.stylisticTypeChecked`
-- Install [eslint-plugin-react](https://github.com/jsx-eslint/eslint-plugin-react) and update the config:
+`npm run dev` starts Vite on port 5123 and Electron. Bluetooth and global input
+capture run in Electron, so opening Vite alone does not provide a functioning
+Electron bridge. macOS requires permission to observe global input.
 
-```js
-// eslint.config.js
-import react from 'eslint-plugin-react'
-
-export default tseslint.config({
-  // Set the react version
-  settings: { react: { version: '18.3' } },
-  plugins: {
-    // Add the react plugin
-    react,
-  },
-  rules: {
-    // other rules...
-    // Enable its recommended rules
-    ...react.configs.recommended.rules,
-    ...react.configs['jsx-runtime'].rules,
-  },
-})
+```sh
+npm run check                # lint, Electron/preload type-check, tests, renderer build
+npm run transpile:electron   # main and sandboxed preload builds only
+npm run dist:mac
+npm run dist:win
+npm run dist:linux
 ```
+
+The Linux UI can be built, but secure dongle connections are unavailable with the
+current Noble Linux HCI driver. Native macOS and Windows drivers are used for
+passkey pairing. These flows still require real-device verification.
+
+Update the firmware together with the app. Hold the dongle button for two seconds,
+release, then scan/connect and enter the displayed code in the OS pairing dialog.
+See [pairing, protocol and input behavior](../docs/input-and-ble.md).
+
+Linux packaging rebuilds native dependencies and requires system development
+headers, including `libudev-dev` for the `usb` dependency. A renderer build alone
+does not verify native packaging prerequisites.
