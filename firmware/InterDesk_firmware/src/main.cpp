@@ -8,6 +8,7 @@
 #include "USBHIDMouse.h"
 #include "USBHIDKeyboard.h"
 #include "usb/abs_mouse.h"
+#include "usb/pairing_code.h"
 
 namespace {
 constexpr uint8_t BUTTON_PIN = 0;
@@ -17,6 +18,7 @@ constexpr uint32_t FORGET_HOLD_MS = 8000;
 constexpr UBaseType_t INPUT_QUEUE_LENGTH = 16;
 
 QueueHandle_t inputQueue;
+QueueHandle_t pairingCodeQueue;
 BleServer* ble = nullptr;
 USBHIDKeyboard keyboard;
 USBHIDMouse mouse;
@@ -24,6 +26,18 @@ USBHIDAbsMouse absMouse;
 USBHID hid;
 // Keep USB stalls bounded too; one combined relative report per BLE packet.
 constexpr uint32_t USB_REPORT_TIMEOUT_MS = 10;
+
+struct PairingCodeOutput {
+    uint32_t now() const { return millis(); }
+    bool ready() const { return hid.ready(); }
+    bool matches(uint32_t passkey) const {
+        return ble->pairingOpen() && ble->pairingPasskey() == passkey;
+    }
+    bool sendKeyboard(const uint8_t (&report)[8]) const {
+        return hid.SendReport(HID_REPORT_ID_KEYBOARD, report, sizeof(report), USB_REPORT_TIMEOUT_MS);
+    }
+    void pause(uint32_t duration) const { vTaskDelay(pdMS_TO_TICKS(duration)); }
+};
 
 bool releaseAll() {
     if (!hid.ready()) return false;
@@ -70,6 +84,19 @@ void decoderTask(void*) {
         }
         if (received && packet.generation == generation && packet.type == BlePacketType::Reset) {
             releasePending = true;
+        }
+        PairingCodeRequest pairingCode{};
+        if (xQueueReceive(pairingCodeQueue, &pairingCode, 0) == pdTRUE) {
+            // Only pollButton can enqueue this command; BLE cannot request code
+            // typing. Keep it separate from link resets/disconnect callbacks.
+            PairingCodeOutput output;
+            if (!releaseAll() || !typePairingCode(pairingCode, output)) {
+                Serial.println("Code typing stopped. Focus a text editor, enable Num Lock, and hold/release the button again.");
+            }
+            releasePending = true;
+            // A new BLE session must not inherit a report discarded here.
+            if (received && packet.type == BlePacketType::HidReport) ble->failLink();
+            continue;
         }
         // USB may be suspended while BLE disconnects. Retry releases on wake;
         // never forget a failed release and leave the host with a held control.
@@ -129,6 +156,8 @@ void pollButton() {
         // Act on release so an eight-second hold never briefly opens pairing
         // before the old trust records are erased.
         ble->openPairingWindow(now - pressedAt >= FORGET_HOLD_MS);
+        const PairingCodeRequest code{ble->pairingPasskey(), millis()};
+        xQueueOverwrite(pairingCodeQueue, &code);
     }
 }
 } // namespace
@@ -138,6 +167,8 @@ void setup() {
     pinMode(BUTTON_PIN, INPUT_PULLUP);
     inputQueue = xQueueCreate(INPUT_QUEUE_LENGTH, sizeof(BlePacket));
     configASSERT(inputQueue);
+    pairingCodeQueue = xQueueCreate(1, sizeof(PairingCodeRequest));
+    configASSERT(pairingCodeQueue);
     keyboard.begin();
     mouse.begin();
     absMouse.begin();

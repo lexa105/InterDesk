@@ -31,7 +31,7 @@ void BleServer::start() {
     advertising->addServiceUUID(SVC_UUID);
     advertising->enableScanResponse(true);
     advertising->start();
-    Serial.println("Hold button 2s to pair; 8s to forget all trusted laptops.");
+    Serial.println("Focus a text editor with Num Lock on. Hold/release button 2s to type the pairing code; 8s to forget trusted laptops.");
 }
 
 bool BleServer::pairingOpen() const {

@@ -77,6 +77,9 @@ pairing, or the wire protocol. It documents the current behavior and hardware ch
 - CONTROL `1236` is an authenticated version read (`2`) and reset (`0`) / heartbeat (`1`) write.
 - Both characteristics require passkey-authenticated LE Secure Connections. Pairing
   is opened by holding/releasing GPIO0 for 2s, or 8s to erase bonds. No insecure fallback.
+- The physical pairing gesture types the code over USB HID into a focused editor
+  on PC2 (Num Lock on, no Enter). It works without a dongle display. Code requests
+  expire on USB stalls and are never triggered by remote BLE events.
 - The app serializes acknowledged writes, coalesces motion, expires input, and
   invalidates old callbacks at disconnect. Native and overlay capture also check age.
 - The pointer-lock overlay is implemented for both mouse modes. Unlocked movement
@@ -114,8 +117,9 @@ Key files:
 
 ### Firmware (`firmware/InterDesk_firmware`)
 
-PlatformIO project with two environments:
+PlatformIO project with three environments:
 - `esp32-s3-devkitc-1` — generic ESP32-S3 dev board, no display
+- `esp32-s3-headless-16mb` — 16 MB dongle without a usable display
 - `lilygo-t-dongle-s3` — LilyGO T-Dongle S3 (USB-A form factor, has a TFT display) — the actual
   target hardware for this project
 

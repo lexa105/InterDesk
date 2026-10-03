@@ -9,3 +9,6 @@ c++ -std=c++17 -Wall -Wextra -Werror \
     "$project_dir/src/ble/ble_server.cpp" "$project_dir/src/ble/ble_callbacks.cpp" \
     -o "$test_binary"
 "$test_binary"
+c++ -std=c++17 -Wall -Wextra -Werror -I"$project_dir/src" \
+    "$project_dir/test/host/pairing_code_test.cpp" -o "$test_binary"
+"$test_binary"

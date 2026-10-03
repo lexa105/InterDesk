@@ -5,10 +5,12 @@ Old firmware is rejected before forwarding is enabled.
 
 ## Pair once, reconnect normally
 
-1. Plug the dongle into the target computer.
-2. Hold its GPIO0 button for **2 seconds**, then release. Pairing opens for 60 seconds.
-3. Scan and Connect in InterDesk. Enter the six-digit code displayed on the dongle
-   in the laptop's system Bluetooth pairing dialog. Include leading zeroes.
+1. Plug the dongle into the target computer. Focus a blank text editor on that
+   computer and enable **Num Lock** (use the OS on-screen keyboard if needed).
+2. Hold its GPIO0 button for **2 seconds**, then release. Pairing opens for 60 seconds
+   and the dongle types six digits into the editor over USB HID, without Enter.
+3. Scan and Connect in InterDesk on the laptop. Enter those six digits in the
+   laptop's system Bluetooth pairing dialog. Include leading zeroes.
 4. Later connections use the stored Bluetooth bond, without another code.
 
 If the OS does not open a pairing dialog automatically, pair from its Bluetooth
@@ -17,9 +19,20 @@ remove the dongle from the laptop's Bluetooth settings, hold the dongle button
 for **8 seconds and release** to erase its bonds, and pair again. The firmware
 stores up to NimBLE's configured bond limit (currently three).
 
-The generic board build prints the code to its USB serial console at 115200 baud
-instead of a display. It needs a way for the owner to read that console; this is
-less convenient than the display-equipped dongle.
+No working dongle display is needed. Every build types the code using USB keypad
+usages, avoiding the shifted number row on layouts such as Czech or French.
+These usages require Num Lock on hosts that use it; the dongle does not change
+the host's lock state. See the [USB HID usage tables](https://www.usb.org/sites/default/files/hut1_3_0.pdf),
+Keyboard/Keypad page. Release any locally held modifiers before requesting a code.
+The TFT build also displays the code; builds without a display also print it to
+the USB serial console at 115200 baud. Use `esp32-s3-headless-16mb` for a 16 MB
+dongle with a broken screen; it never initializes the display or its SPI pins.
+
+Only a physical button release requests USB code typing. Boot, BLE connection
+attempts, and reconnections never type a code. A single pending request expires
+after 100 ms; a USB failure or pause over 100 ms cancels the remaining digits.
+The decoder retries releases, without replaying the code on resume. If output
+is incomplete, focus the editor and hold/release the button again for a fresh code.
 
 The button now controls pairing; the old advertising-only “AirDrop” toggle has
 been removed. There was no file-transfer implementation behind that toggle.
@@ -34,6 +47,9 @@ been removed. There was no file-transfer implementation behind that toggle.
 - Unknown laptops require a physical pairing window. Merely advertising a matching
   name or service is not proof of trust; the first pairing code must match the
   physical dongle. Never enter a code supplied by a remote advertisement.
+- The USB-connected computer receives the pairing code and is therefore trusted
+  during enrollment. Use a computer you control to read it; Bluetooth still
+  requires authenticated Secure Connections and never sends the code in GATT.
 - Only one BLE connection is accepted at a time. Input queues are invalidated at
   disconnect, overflow, timeout, USB failure, and explicit input reset.
 - Re-pairing is gated by the button. NimBLE 2.5.1 internally deletes a bond when it
@@ -139,6 +155,7 @@ starts a new queue and leaves forwarding off until explicitly activated again.
   and rename, and settings snapshots do not share their nested layout object.
 - `firmware/.../ble/`: pairing policy, authenticated GATT callbacks and receive queue.
 - `firmware/.../main.cpp`: USB decoding, release retries, physical button, display.
+- `firmware/.../usb/pairing_code.h`: bounded local code typing, keypad digit reports.
 
 ## Verification and remaining work
 
@@ -156,12 +173,15 @@ pio run
 Desktop tests require Node 22.15 or later for native-module mocking. Firmware host
 policy tests require a C++17 compiler. They compile the real BLE server/callback
 code against test doubles; they do **not** emulate the Bluetooth stack or radio.
-Both ESP32 targets are also compiled against the actual pinned NimBLE library.
+All ESP32 targets are also compiled against the actual pinned NimBLE library.
+The pairing-code tests cover digits/leading zeroes, releases, expiry, USB failure,
+pairing cancellation, and clock rollover without generating real keyboard events.
 
 Physical validation before relying on the new firmware:
 
-1. Verify the display pins for the actual board, then check that the six-digit code
-   is visible and matches the OS prompt. Existing wiring has been preserved.
+1. Focus an editor with Num Lock enabled, hold/release the button, and check that
+   exactly six digits appear without Enter. Use them to complete the laptop's
+   pairing prompt. For TFT builds, also verify the display pins and code display.
 2. Pair, power-cycle both sides, reconnect, and confirm no new code is needed.
 3. Reject a wrong code and a pairing attempt with the physical window closed.
 4. Hold a key/button, stall/kill the app or disable Bluetooth, then reconnect.

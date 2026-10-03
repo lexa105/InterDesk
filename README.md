@@ -52,7 +52,7 @@ That means it can work with everything from your everyday desktop to locked-down
 ## How does it work?
 
 1. Plug the InterDesk dongle into the computer you want to control.
-2. Hold the dongle button for two seconds and release, then connect in InterDesk. On first pairing, enter the dongle’s six-digit code in the laptop’s Bluetooth dialog. Trusted laptops reconnect without a code.
+2. Focus a blank text editor on that computer with Num Lock enabled. Hold the dongle button for two seconds and release; it types a six-digit pairing code. Connect in InterDesk on the laptop and enter that code in its Bluetooth dialog. Trusted laptops reconnect without a code. A dongle screen is optional.
 3. Set up or use the activation shortcut to switch input forwarding on and off.
 4. When active, the app captures your keyboard and mouse input and converts it into standard HID reports.
 5. These reports are sent over Bluetooth to the dongle.
@@ -185,4 +185,3 @@ C++. See `CLAUDE.md` for the protocol and the repo layout.
 
 Open an issue before starting something large so we do not duplicate work. This is our first
 bigger project, so suggestions about how we build it are as welcome as code.
-
