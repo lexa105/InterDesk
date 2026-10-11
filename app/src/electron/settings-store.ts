@@ -36,7 +36,7 @@ export interface AppSettings {
 
 const DEFAULT_SETTINGS: AppSettings = {
     switchKeybind: 'CommandOrControl+Shift+R',
-    clipboardKeybind: 'CommandOrControl+Shift+Alt+C',
+    clipboardKeybind: 'Control+Alt+Command+V',
     forwardKeyboard: true,
     forwardMouse: true,
     dynamicSwitch: true,
@@ -73,6 +73,13 @@ class SettingsStore {
                 if (raw?.[key] !== undefined) (merged as unknown as Record<string, unknown>)[key] = raw[key];
             }
             if (typeof merged.clipboardKeybind !== 'string') {
+                merged.clipboardKeybind = DEFAULT_SETTINGS.clipboardKeybind;
+            } else if (
+                merged.clipboardKeybind === 'CommandOrControl+Shift+Alt+C' ||
+                merged.clipboardKeybind === 'CommandOrControl+Shift+Alt+V'
+            ) {
+                // Move existing installs from the old built-in shortcut to the
+                // new default while preserving any shortcut the user chose.
                 merged.clipboardKeybind = DEFAULT_SETTINGS.clipboardKeybind;
             }
             // Migration: settings files written before the layout model only
