@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { AppSettings } from '../electron-api'
+import type { AppSettings, KeybindType } from '../electron-api'
 import { eventToAccelerator, formatAccelerator, isModifierCode } from '../keybind'
 
 interface KeybindRecorderProps {
+  type: KeybindType
   value: string
   onChange: (settings: AppSettings) => void
 }
 
-export function KeybindRecorder({ value, onChange }: KeybindRecorderProps) {
+export function KeybindRecorder({ type, value, onChange }: KeybindRecorderProps) {
   const [recording, setRecording] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const recordingRef = useRef(recording)
@@ -17,17 +18,17 @@ export function KeybindRecorder({ value, onChange }: KeybindRecorderProps) {
     setRecording(false)
     if (cancelled) {
       // Restore the suspended global shortcut.
-      await window.bkmd.cancelKeybindCapture()
+      await window.bkmd.cancelKeybindCapture(type)
     }
-  }, [])
+  }, [type])
 
   const startRecording = useCallback(async () => {
     setError(null)
     // Suspend the current global shortcut so pressing it gets recorded
     // instead of toggling the monitors.
-    await window.bkmd.beginKeybindCapture()
+    await window.bkmd.beginKeybindCapture(type)
     setRecording(true)
-  }, [])
+  }, [type])
 
   useEffect(() => {
     if (!recording) return
@@ -49,7 +50,7 @@ export function KeybindRecorder({ value, onChange }: KeybindRecorderProps) {
       }
 
       setRecording(false)
-      const result = await window.bkmd.setKeybind(accelerator)
+      const result = await window.bkmd.setKeybind(type, accelerator)
       if (result.ok) {
         setError(null)
         onChange(result.settings)
@@ -67,15 +68,15 @@ export function KeybindRecorder({ value, onChange }: KeybindRecorderProps) {
       window.removeEventListener('keydown', onKeyDown, true)
       window.removeEventListener('blur', onBlur)
     }
-  }, [recording, onChange, stopRecording])
+  }, [recording, onChange, stopRecording, type])
 
   // If the component unmounts mid-recording (e.g. dongle disconnects),
   // make sure the global shortcut comes back.
   useEffect(() => {
     return () => {
-      if (recordingRef.current) void window.bkmd.cancelKeybindCapture()
+      if (recordingRef.current) void window.bkmd.cancelKeybindCapture(type)
     }
-  }, [])
+  }, [type])
 
   return (
     <div className="flex flex-col items-end gap-1">

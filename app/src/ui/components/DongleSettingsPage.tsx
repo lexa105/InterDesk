@@ -77,8 +77,20 @@ export function DongleSettingsPage({
             label="Toggle forwarding"
             description="Global shortcut that turns input forwarding on and off"
           >
-            <KeybindRecorder value={settings.switchKeybind} onChange={onSettingsChange} />
+            <KeybindRecorder type="switch" value={settings.switchKeybind} onChange={onSettingsChange} />
           </SettingsRow>
+        </SettingsGroup>
+
+        <SettingsGroup title="Clipboard typing">
+          <SettingsRow
+            label="Type clipboard on target"
+            description="Reads source text and types it on the target; common accents are simplified and other unsupported characters may be skipped."
+          >
+            <KeybindRecorder type="clipboard" value={settings.clipboardKeybind} onChange={onSettingsChange} />
+          </SettingsRow>
+          <p className="px-4 py-3 text-xs leading-5 text-ink-faint">
+            Clipboard text travels over the current BLE connection, which is not encrypted. Typing follows the target’s keyboard layout.
+          </p>
         </SettingsGroup>
 
         <SettingsGroup title="Connection">

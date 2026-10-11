@@ -29,3 +29,12 @@ public:
 private:
     QueueHandle_t _q;
 };
+
+class ClipboardDataCallbacks : public NimBLECharacteristicCallbacks {
+public:
+    explicit ClipboardDataCallbacks(BleServer& owner) : _owner(owner) {}
+    void onWrite(NimBLECharacteristic* characteristic, NimBLEConnInfo& connInfo) override;
+
+private:
+    BleServer& _owner;
+};

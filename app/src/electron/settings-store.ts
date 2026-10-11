@@ -3,6 +3,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 
 export type Pc2Side = 'left' | 'right' | 'top' | 'bottom';
+export type KeybindType = 'switch' | 'clipboard';
 
 /** macOS-display-arrangement-style description of where PC2's screen sits. */
 export interface Pc2Layout {
@@ -21,6 +22,8 @@ export interface Pc2Layout {
 export interface AppSettings {
     /** Electron accelerator that toggles key/mouse forwarding on and off. */
     switchKeybind: string;
+    /** Electron accelerator that types the current clipboard on the target. */
+    clipboardKeybind: string;
     forwardKeyboard: boolean;
     forwardMouse: boolean;
     /** Switch machines by throwing the cursor at the screen edge facing PC2. */
@@ -33,6 +36,7 @@ export interface AppSettings {
 
 const DEFAULT_SETTINGS: AppSettings = {
     switchKeybind: 'CommandOrControl+Shift+R',
+    clipboardKeybind: 'CommandOrControl+Shift+Alt+C',
     forwardKeyboard: true,
     forwardMouse: true,
     dynamicSwitch: true,
@@ -67,6 +71,9 @@ class SettingsStore {
             // don't survive on the typed object.
             for (const key of SETTINGS_KEYS) {
                 if (raw?.[key] !== undefined) (merged as unknown as Record<string, unknown>)[key] = raw[key];
+            }
+            if (typeof merged.clipboardKeybind !== 'string') {
+                merged.clipboardKeybind = DEFAULT_SETTINGS.clipboardKeybind;
             }
             // Migration: settings files written before the layout model only
             // knew which side PC2 was on.

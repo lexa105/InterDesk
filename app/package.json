@@ -10,6 +10,7 @@
     "dev:electron": "npm run transpile:electron && cross-env NODE_ENV=development electron .",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
+    "test:protocol": "node --experimental-strip-types --test tests/clipboard-protocol.test.mjs",
     "preview": "vite preview",
     "transpile:electron": "tsc --project src/electron/tsconfig.json && tsc --project src/electron/preload/tsconfig.json",
     "dist:mac": "npm run transpile:electron && npm run build && electron-builder --mac --arm64",
