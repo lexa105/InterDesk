@@ -10,7 +10,7 @@ const noble = withBindings('default');
 const HID_CHARACTERISTIC_UUID = '1235';
 const CLIPBOARD_DATA_CHARACTERISTIC_UUID = '1236';
 const CLIPBOARD_STATUS_CHARACTERISTIC_UUID = '1237';
-const BLE_SERVICE_UUID = 'b00b';
+const BLE_SERVICE_UUID = '98b5f6d3-3d7a-4f71-8ef0-1d3ed6fa2026';
 
 interface PendingClipboardTransfer {
     resolve: (result: ClipboardResult) => void;
@@ -124,10 +124,13 @@ class BluetoothManager extends EventEmitter {
                 this.setConnectionState('disconnected');
             });
 
-            const { services, characteristics } = await peripheral.discoverAllServicesAndCharacteristicsAsync();
+            const { services, characteristics } = await peripheral.discoverSomeServicesAndCharacteristicsAsync(
+                [BLE_SERVICE_UUID],
+                [HID_CHARACTERISTIC_UUID, CLIPBOARD_DATA_CHARACTERISTIC_UUID, CLIPBOARD_STATUS_CHARACTERISTIC_UUID],
+            );
 
-            console.log("Found Services:", services.map(s => s.uuid));
-            console.log("Found Characteristics:", characteristics.map(c => ({ uuid: c.uuid, properties: c.properties })));
+            console.log("Found InterDesk Services:", services.map(s => s.uuid));
+            console.log("Found InterDesk Characteristics:", characteristics.map(c => ({ uuid: c.uuid, properties: c.properties })));
 
             const hidChar = characteristics.find(c => normalizeGattUuid(c.uuid) === HID_CHARACTERISTIC_UUID);
             if (hidChar) {
@@ -141,28 +144,9 @@ class BluetoothManager extends EventEmitter {
                 c => normalizeGattUuid(c.uuid) === CLIPBOARD_DATA_CHARACTERISTIC_UUID
             ) ?? null;
 
-            let clipboardStatusChar = characteristics.find(
+            const clipboardStatusChar = characteristics.find(
                 c => normalizeGattUuid(c.uuid) === CLIPBOARD_STATUS_CHARACTERISTIC_UUID
             );
-            if (!clipboardStatusChar) {
-                // Some platform BLE stacks can omit a newly added characteristic
-                // from broad discovery while still resolving it by UUID.
-                try {
-                    const targetedDiscovery = await peripheral.discoverSomeServicesAndCharacteristicsAsync(
-                        [BLE_SERVICE_UUID],
-                        [CLIPBOARD_STATUS_CHARACTERISTIC_UUID],
-                    );
-                    console.log('Targeted clipboard status discovery:', targetedDiscovery.characteristics.map(c => ({
-                        uuid: c.uuid,
-                        properties: c.properties,
-                    })));
-                    clipboardStatusChar = targetedDiscovery.characteristics.find(
-                        c => normalizeGattUuid(c.uuid) === CLIPBOARD_STATUS_CHARACTERISTIC_UUID
-                    );
-                } catch (error) {
-                    console.warn('Targeted clipboard status discovery failed:', error);
-                }
-            }
             if (clipboardStatusChar) {
                 console.log('Clipboard status characteristic (1237) found:', clipboardStatusChar.properties);
                 this.clipboardStatusCharacteristic = clipboardStatusChar;

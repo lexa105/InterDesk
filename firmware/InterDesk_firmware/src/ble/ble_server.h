@@ -15,8 +15,8 @@ struct ClipboardTransfer {
 };
 
 // ---------------------------------------------------------------------------
-// Wire format (service B00B): HID on characteristic 1235, clipboard on 1236,
-// and clipboard results on 1237.
+// Wire format (InterDesk's custom 128-bit service): HID on characteristic
+// 1235, clipboard on 1236, and clipboard results on 1237.
 //
 // This header is the reference for the BLE protocol shared with the Electron
 // app. There is no codegen between the two sides, so any change here must be
@@ -65,7 +65,10 @@ struct BlePacket {
 
 
 
-static const NimBLEUUID SVC_UUID("B00B");
+// A versioned, application-specific 128-bit service UUID avoids collisions
+// with 16-bit assigned UUIDs and gives BLE centrals a new cache identity when
+// the InterDesk GATT profile changes.
+static const NimBLEUUID SVC_UUID("98b5f6d3-3d7a-4f71-8ef0-1d3ed6fa2026");
 static const NimBLEUUID DATA_UUID("1235");
 static const NimBLEUUID CLIPBOARD_DATA_UUID("1236");
 static const NimBLEUUID CLIPBOARD_STATUS_UUID("1237");
