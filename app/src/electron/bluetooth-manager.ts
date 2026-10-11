@@ -2,6 +2,7 @@ import { withBindings, Peripheral, type Characteristic } from '@stoprocent/noble
 import { Buffer } from 'node:buffer';
 import { EventEmitter } from 'node:events';
 import { decodeClipboardResult, encodeClipboardFrames, type ClipboardResult } from './clipboard-protocol.js';
+import { normalizeGattUuid } from './gatt-uuid.js';
 
 // 'default' automatically selects the right driver for Windows, Mac, or Linux
 const noble = withBindings('default');
@@ -127,7 +128,7 @@ class BluetoothManager extends EventEmitter {
             console.log("Found Services:", services.map(s => s.uuid));
             console.log("Found Characteristics:", characteristics.map(c => c.uuid));
 
-            const hidChar = characteristics.find(c => c.uuid === HID_CHARACTERISTIC_UUID);
+            const hidChar = characteristics.find(c => normalizeGattUuid(c.uuid) === HID_CHARACTERISTIC_UUID);
             if (hidChar) {
                 this.targetCharacteristics = hidChar;
                 console.log('Target characteristic (1235) found and set!');
@@ -135,9 +136,13 @@ class BluetoothManager extends EventEmitter {
                 console.warn('Target characteristic (1235) NOT found on this device.');
             }
 
-            this.clipboardDataCharacteristic = characteristics.find(c => c.uuid === CLIPBOARD_DATA_CHARACTERISTIC_UUID) ?? null;
+            this.clipboardDataCharacteristic = characteristics.find(
+                c => normalizeGattUuid(c.uuid) === CLIPBOARD_DATA_CHARACTERISTIC_UUID
+            ) ?? null;
 
-            const clipboardStatusChar = characteristics.find(c => c.uuid === CLIPBOARD_STATUS_CHARACTERISTIC_UUID);
+            const clipboardStatusChar = characteristics.find(
+                c => normalizeGattUuid(c.uuid) === CLIPBOARD_STATUS_CHARACTERISTIC_UUID
+            );
             if (clipboardStatusChar) {
                 this.clipboardStatusCharacteristic = clipboardStatusChar;
                 this.clipboardStatusListener = (data: Buffer) => {
