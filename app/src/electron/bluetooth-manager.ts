@@ -1,11 +1,22 @@
-import { withBindings, Peripheral } from '@stoprocent/noble';
+import { withBindings, Peripheral, type Characteristic } from '@stoprocent/noble';
 import { Buffer } from 'node:buffer';
 import { EventEmitter } from 'node:events';
+import { decodeClipboardResult, encodeClipboardFrames, type ClipboardResult } from './clipboard-protocol.js';
+import { normalizeGattUuid } from './gatt-uuid.js';
 
 // 'default' automatically selects the right driver for Windows, Mac, or Linux
 const noble = withBindings('default');
 
 const HID_CHARACTERISTIC_UUID = '1235';
+const CLIPBOARD_DATA_CHARACTERISTIC_UUID = '1236';
+const CLIPBOARD_STATUS_CHARACTERISTIC_UUID = '1237';
+const BLE_SERVICE_UUID = '98b5f6d3-3d7a-4f71-8ef0-1d3ed6fa2026';
+
+interface PendingClipboardTransfer {
+    resolve: (result: ClipboardResult) => void;
+    reject: (error: Error) => void;
+    timeout: ReturnType<typeof setTimeout>;
+}
 
 export interface BluetoothDevice {
     id: string;
@@ -19,7 +30,13 @@ export type ConnectionState = 'disconnected' | 'connecting' | 'connected';
 class BluetoothManager extends EventEmitter {
     private discoveredPeripherals = new Map<string, Peripheral>();
     private connectedPeripheral: Peripheral | null = null;
-    private targetCharacteristics: any = null;
+    private targetCharacteristics: Characteristic | null = null;
+    private clipboardDataCharacteristic: Characteristic | null = null;
+    private clipboardStatusCharacteristic: Characteristic | null = null;
+    private clipboardStatusListener: ((data: Buffer, isNotification: boolean) => void) | null = null;
+    private nextClipboardTransferId = 0;
+    private clipboardSending = false;
+    private pendingClipboardTransfers = new Map<number, PendingClipboardTransfer>();
     private connectionState: ConnectionState = 'disconnected';
     private scanning = false;
 
@@ -100,15 +117,22 @@ class BluetoothManager extends EventEmitter {
             peripheral.once('disconnect', () => {
                 this.connectedPeripheral = null;
                 this.targetCharacteristics = null;
+                this.clipboardDataCharacteristic = null;
+                this.detachClipboardStatusListener();
+                this.clipboardStatusCharacteristic = null;
+                this.failPendingClipboardTransfers(new Error('Bluetooth disconnected during clipboard transfer.'));
                 this.setConnectionState('disconnected');
             });
 
-            const { services, characteristics } = await peripheral.discoverAllServicesAndCharacteristicsAsync();
+            const { services, characteristics } = await peripheral.discoverSomeServicesAndCharacteristicsAsync(
+                [BLE_SERVICE_UUID],
+                [HID_CHARACTERISTIC_UUID, CLIPBOARD_DATA_CHARACTERISTIC_UUID, CLIPBOARD_STATUS_CHARACTERISTIC_UUID],
+            );
 
-            console.log("Found Services:", services.map(s => s.uuid));
-            console.log("Found Characteristics:", characteristics.map(c => c.uuid));
+            console.log("Found InterDesk Services:", services.map(s => s.uuid));
+            console.log("Found InterDesk Characteristics:", characteristics.map(c => ({ uuid: c.uuid, properties: c.properties })));
 
-            const hidChar = characteristics.find(c => c.uuid === HID_CHARACTERISTIC_UUID);
+            const hidChar = characteristics.find(c => normalizeGattUuid(c.uuid) === HID_CHARACTERISTIC_UUID);
             if (hidChar) {
                 this.targetCharacteristics = hidChar;
                 console.log('Target characteristic (1235) found and set!');
@@ -116,15 +140,52 @@ class BluetoothManager extends EventEmitter {
                 console.warn('Target characteristic (1235) NOT found on this device.');
             }
 
+            this.clipboardDataCharacteristic = characteristics.find(
+                c => normalizeGattUuid(c.uuid) === CLIPBOARD_DATA_CHARACTERISTIC_UUID
+            ) ?? null;
+
+            const clipboardStatusChar = characteristics.find(
+                c => normalizeGattUuid(c.uuid) === CLIPBOARD_STATUS_CHARACTERISTIC_UUID
+            );
+            if (clipboardStatusChar) {
+                console.log('Clipboard status characteristic (1237) found:', clipboardStatusChar.properties);
+                this.clipboardStatusCharacteristic = clipboardStatusChar;
+                this.clipboardStatusListener = (data: Buffer) => {
+                    const result = decodeClipboardResult(data);
+                    if (!result) return;
+                    const pending = this.pendingClipboardTransfers.get(result.transferId);
+                    if (!pending) return;
+                    clearTimeout(pending.timeout);
+                    this.pendingClipboardTransfers.delete(result.transferId);
+                    pending.resolve(result);
+                };
+                clipboardStatusChar.on('data', this.clipboardStatusListener);
+                await clipboardStatusChar.subscribeAsync();
+            } else {
+                this.clipboardStatusCharacteristic = null;
+                console.warn('Clipboard status characteristic (1237) not found; clipboard typing is unavailable on this firmware.');
+            }
+
             this.setConnectionState('connected');
         } catch (err) {
+            this.detachClipboardStatusListener();
+            if (this.connectedPeripheral === peripheral) {
+                try {
+                    await peripheral.disconnectAsync();
+                } catch {
+                    // Preserve the discovery/subscription error for the caller.
+                }
+            }
             this.connectedPeripheral = null;
+            this.targetCharacteristics = null;
+            this.clipboardDataCharacteristic = null;
+            this.clipboardStatusCharacteristic = null;
             this.setConnectionState('disconnected');
             throw err;
         }
     }
 
-    public async sendData(peripheral: Peripheral, serviceUuid: string, charUuid: string, data: any) {
+    public async sendData(peripheral: Peripheral, serviceUuid: string, charUuid: string, data: string) {
         try {
             const { characteristics } = await peripheral.discoverSomeServicesAndCharacteristicsAsync(
                 [serviceUuid],
@@ -155,9 +216,55 @@ class BluetoothManager extends EventEmitter {
 
         try {
             await this.targetCharacteristics.writeAsync(report, withoutResponse);
-            console.log(`HID report sent ${withoutResponse ? 'without' : 'with'} response:`, report)
         } catch (e) {
             console.error("Failed to send HID report: ", e)
+        }
+    }
+
+    public async sendClipboardText(text: string): Promise<{ skippedCharacters: number }> {
+        if (!this.clipboardDataCharacteristic || !this.clipboardStatusCharacteristic) {
+            throw new Error('Clipboard typing needs the updated InterDesk dongle firmware.');
+        }
+        if (this.clipboardSending) {
+            throw new Error('A clipboard transfer is already in progress.');
+        }
+
+        this.nextClipboardTransferId = (this.nextClipboardTransferId % 0xff) + 1;
+        const transferId = this.nextClipboardTransferId;
+        const frames = encodeClipboardFrames(text, transferId);
+        this.clipboardSending = true;
+
+        try {
+            const resultPromise = new Promise<{ result: ClipboardResult } | { error: Error }>((resolve) => {
+                const timeout = setTimeout(() => {
+                    this.pendingClipboardTransfers.delete(transferId);
+                    resolve({ error: new Error('The dongle did not finish typing clipboard text in time.') });
+                }, 20000);
+                this.pendingClipboardTransfers.set(transferId, {
+                    resolve: (result) => resolve({ result }),
+                    reject: (error) => resolve({ error }),
+                    timeout,
+                });
+            });
+
+            for (const frame of frames) {
+                await this.clipboardDataCharacteristic.writeAsync(frame, false);
+            }
+
+            const outcome = await resultPromise;
+            if ('error' in outcome) throw outcome.error;
+            const result = outcome.result;
+            if (!result.ok) throw new Error('The dongle rejected the clipboard transfer.');
+            return { skippedCharacters: result.skippedCharacters };
+        } catch (error) {
+            const pending = this.pendingClipboardTransfers.get(transferId);
+            if (pending) {
+                clearTimeout(pending.timeout);
+                this.pendingClipboardTransfers.delete(transferId);
+            }
+            throw error;
+        } finally {
+            this.clipboardSending = false;
         }
     }
 
@@ -172,9 +279,28 @@ class BluetoothManager extends EventEmitter {
             } finally {
                 this.connectedPeripheral = null;
                 this.targetCharacteristics = null;
+                this.clipboardDataCharacteristic = null;
+                this.detachClipboardStatusListener();
+                this.clipboardStatusCharacteristic = null;
+                this.failPendingClipboardTransfers(new Error('Bluetooth disconnected during clipboard transfer.'));
                 this.setConnectionState('disconnected');
             }
         }
+    }
+
+    private failPendingClipboardTransfers(error: Error) {
+        for (const pending of this.pendingClipboardTransfers.values()) {
+            clearTimeout(pending.timeout);
+            pending.reject(error);
+        }
+        this.pendingClipboardTransfers.clear();
+    }
+
+    private detachClipboardStatusListener() {
+        if (this.clipboardStatusCharacteristic && this.clipboardStatusListener) {
+            this.clipboardStatusCharacteristic.removeListener('data', this.clipboardStatusListener);
+        }
+        this.clipboardStatusListener = null;
     }
 
     private setConnectionState(state: ConnectionState) {

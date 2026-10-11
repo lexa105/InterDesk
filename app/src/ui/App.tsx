@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { AppSettings, BluetoothDevice, ConnectionState } from './electron-api'
+import type { AppSettings, BluetoothDevice, ClipboardStatus, ConnectionState } from './electron-api'
 import { DevicesPage } from './components/DevicesPage'
 import { DongleSettingsPage } from './components/DongleSettingsPage'
 import { Sidebar, type View } from './components/Sidebar'
@@ -16,6 +16,7 @@ function App() {
   const [error, setError] = useState<string | null>(null)
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const [monitoring, setMonitoring] = useState(false)
+  const [clipboardStatus, setClipboardStatus] = useState<ClipboardStatus | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -56,6 +57,7 @@ function App() {
     })
 
     const unsubscribeMonitor = window.bkmd.onMonitorStateChanged(setMonitoring)
+    const unsubscribeClipboard = window.bkmd.onClipboardStatus(setClipboardStatus)
 
     return () => {
       cancelled = true
@@ -63,8 +65,15 @@ function App() {
       unsubscribeScan()
       unsubscribeConnection()
       unsubscribeMonitor()
+      unsubscribeClipboard()
     }
   }, [])
+
+  useEffect(() => {
+    if (!clipboardStatus) return
+    const timeout = window.setTimeout(() => setClipboardStatus(null), 6000)
+    return () => window.clearTimeout(timeout)
+  }, [clipboardStatus])
 
   // The dongle page only exists while connected - fall back to Devices
   // when the connection goes away. Switching is a local setting, so it stays
@@ -136,6 +145,18 @@ function App() {
           />
         )}
       </main>
+      {clipboardStatus && (
+        <div
+          role={clipboardStatus.ok ? 'status' : 'alert'}
+          className={`fixed bottom-5 right-5 z-50 max-w-sm rounded-lg border px-4 py-3 text-[13px] shadow-xl ${
+            clipboardStatus.ok
+              ? 'border-ok/30 bg-surface text-ink'
+              : 'border-danger/40 bg-surface text-danger'
+          }`}
+        >
+          {clipboardStatus.message}
+        </div>
+      )}
     </div>
   )
 }

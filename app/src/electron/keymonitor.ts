@@ -72,6 +72,94 @@ const MAC_HID_MAP: Record<number, number> = {
     3676: 0xE7  // Right Meta
 }
 
+const MOD_CONTROL = 1 << 0;
+const MOD_SHIFT = 1 << 1;
+const MOD_ALT = 1 << 2;
+const MOD_META = 1 << 3;
+const MODIFIER_KEYCODES: ReadonlySet<number> = new Set<number>([
+    UiohookKey.Ctrl,
+    UiohookKey.CtrlRight,
+    UiohookKey.Shift,
+    UiohookKey.ShiftRight,
+    UiohookKey.Alt,
+    UiohookKey.AltRight,
+    UiohookKey.Meta,
+    UiohookKey.MetaRight,
+]);
+
+function normalizeModifierFlags(modifiers: number): number {
+    let normalized = 0;
+    if (modifiers & (0x01 | 0x10)) normalized |= MOD_CONTROL;
+    if (modifiers & (0x02 | 0x20)) normalized |= MOD_SHIFT;
+    if (modifiers & (0x04 | 0x40)) normalized |= MOD_ALT;
+    if (modifiers & (0x08 | 0x80)) normalized |= MOD_META;
+    return normalized;
+}
+
+function acceleratorKeycode(key: string): number | null {
+    const normalized = key.toUpperCase();
+    let usage: number;
+
+    if (/^[A-Z]$/.test(normalized)) {
+        usage = 0x04 + normalized.charCodeAt(0) - 65;
+    } else if (/^[0-9]$/.test(normalized)) {
+        usage = normalized === '0' ? 0x27 : 0x1d + Number(normalized);
+    } else if (/^F([1-9]|1[0-2])$/.test(normalized)) {
+        usage = 0x39 + Number(normalized.slice(1));
+    } else {
+        const keyUsages: Record<string, number> = {
+            '-': 0x2d, '=': 0x2e, '[': 0x2f, ']': 0x30, '\\': 0x31,
+            ';': 0x33, "'": 0x34, '`': 0x35, ',': 0x36, '.': 0x37, '/': 0x38,
+            SPACE: 0x2c, TAB: 0x2b, BACKSPACE: 0x2a, ENTER: 0x28, RETURN: 0x28,
+            ESC: 0x29, ESCAPE: 0x29, DELETE: 0x4c,
+            UP: 0x52, DOWN: 0x51, LEFT: 0x50, RIGHT: 0x4f,
+            HOME: 0x4a, END: 0x4d, PAGEUP: 0x4b, PAGEDOWN: 0x4e,
+        };
+        const mappedUsage = keyUsages[normalized];
+        if (mappedUsage === undefined) return null;
+        usage = mappedUsage;
+    }
+
+    const mappedKey = Object.entries(MAC_HID_MAP).find(([, hidUsage]) => hidUsage === usage);
+    return mappedKey ? Number(mappedKey[0]) : null;
+}
+
+function parseClipboardShortcut(accelerator: string): { keycode: number; modifiers: number } | null {
+    const tokens = accelerator.split('+');
+    const key = tokens.pop();
+    if (!key) return null;
+
+    let modifiers = 0;
+    for (const token of tokens) {
+        switch (token) {
+            case 'CommandOrControl':
+            case 'CmdOrCtrl':
+                modifiers |= process.platform === 'darwin' ? MOD_META : MOD_CONTROL;
+                break;
+            case 'Command':
+            case 'Cmd':
+            case 'Meta':
+            case 'Super':
+                modifiers |= MOD_META;
+                break;
+            case 'Control':
+            case 'Ctrl':
+                modifiers |= MOD_CONTROL;
+                break;
+            case 'Alt':
+            case 'Option':
+                modifiers |= MOD_ALT;
+                break;
+            case 'Shift':
+                modifiers |= MOD_SHIFT;
+                break;
+        }
+    }
+
+    const keycode = acceleratorKeycode(key);
+    return keycode !== null && modifiers !== 0 ? { keycode, modifiers } : null;
+}
+
 
 export class KeyMonitor extends EventEmitter {
     //TODO: Dopracovat zde architekturu z Electron strany a pak to prepsat do dokumentace v Notionu. 
@@ -79,6 +167,9 @@ export class KeyMonitor extends EventEmitter {
     // 2.state manegment - toto by se mělo měnit, podle stavu zmáčknutých kláves
     private currentModifiers = 0x00;
     private pressedKeys = new Set<number>();
+    private paused = false;
+    private clipboardShortcut: { keycode: number; modifiers: number } | null = null;
+    private suppressedShortcutKeys = new Set<number>();
 
     //Track if we are monitoring.
     private _isRunning = false;
@@ -118,10 +209,26 @@ export class KeyMonitor extends EventEmitter {
         //Reset our state so we dont have "stuck" ?
         this.currentModifiers = 0x00;
         this.pressedKeys.clear();
+        this.suppressedShortcutKeys.clear();
 
         //Sending bluetooth default empty buffer.
         this.sendReport()
 
+    }
+
+    public setPaused(paused: boolean) {
+        this.paused = paused;
+    }
+
+    public releaseAllForwardedKeys() {
+        const hadPressedInput = this.currentModifiers !== 0 || this.pressedKeys.size > 0;
+        this.currentModifiers = 0;
+        this.pressedKeys.clear();
+        if (hadPressedInput && this._isRunning) this.sendReport();
+    }
+
+    public setClipboardKeybind(accelerator: string) {
+        this.clipboardShortcut = typeof accelerator === 'string' ? parseClipboardShortcut(accelerator) : null;
     }
 
     
@@ -130,6 +237,16 @@ export class KeyMonitor extends EventEmitter {
         // The shared hook may be running for MouseMonitor alone - ignore key
         // events unless keyboard forwarding itself is on.
         if (!this._isRunning) return;
+
+        // The registered Electron accelerator consumes the trigger chord on
+        // the source machine. Do not also forward its final key to the target.
+        if (!isDown && this.suppressedShortcutKeys.delete(uiHookKeycode)) return;
+        if (this.paused) return;
+
+        if (isDown && this.matchesClipboardShortcut(uiHookKeycode)) {
+            this.suppressedShortcutKeys.add(uiHookKeycode);
+            return;
+        }
 
         let changed = false;
 
@@ -164,6 +281,13 @@ export class KeyMonitor extends EventEmitter {
         }
     }
 
+    private matchesClipboardShortcut(keycode: number): boolean {
+        if (!this.clipboardShortcut || this.clipboardShortcut.keycode !== keycode) return false;
+
+        const current = normalizeModifierFlags(this.currentModifiers);
+        return current === this.clipboardShortcut.modifiers;
+    }
+
     private sendReport() {
         //HID report default by 8bytes - default 
         const report = Buffer.alloc(8, 0);
@@ -186,19 +310,7 @@ export class KeyMonitor extends EventEmitter {
 
 
     private isModifier(keycode: number): boolean {
-        const modifiers = [
-            UiohookKey.Ctrl, 
-            UiohookKey.CtrlRight, 
-            UiohookKey.Shift, 
-            UiohookKey.ShiftRight, 
-            UiohookKey.Alt, 
-            UiohookKey.AltRight, 
-            UiohookKey.Meta,
-            UiohookKey.MetaRight
-        ]
-        //Checkne jestli je to modifier.
-        // @ts-ignore
-        return modifiers.includes(keycode)
+        return MODIFIER_KEYCODES.has(keycode);
     }
 
     private updateModifier(keycode: number, isDown: boolean) {
