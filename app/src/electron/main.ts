@@ -341,6 +341,7 @@ function registerSettingsIpc() {
 
 
 app.on('ready', async () => {
+    console.log(`InterDesk v${app.getVersion()} (${isDev() ? 'development' : 'packaged'} build)`);
 
     try {
         await bluetoothManager.initialize();
