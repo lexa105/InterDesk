@@ -6,7 +6,7 @@ import { globalShortcut } from 'electron';
 // by the OS before reaching any app, and macOS event taps (which uiohook uses)
 // see events before hotkey dispatch, so forwarding keeps working. This module
 // blanket-registers the practical keyboard space as no-op global shortcuts to
-// swallow local input, leaving only the switch keybind active.
+// swallow local input, leaving the app's registered global shortcuts active.
 //
 // Known gaps: bare modifier presses and OS-reserved combos (Cmd+Tab, media
 // keys, some system shortcuts) cannot be registered and still reach the local
@@ -54,8 +54,8 @@ class LocalKeyBlocker {
     }
 
     /**
-     * Swallow all local keystrokes except `excludeAccelerator` (the switch
-     * keybind, which must keep firing its own registered handler).
+     * Swallow local keystrokes while preserving the configured exclusion and
+     * any other application shortcut already registered with Electron.
      */
     public start(excludeAccelerator: string) {
         if (this.isActive) return;

@@ -1,4 +1,4 @@
-import {app, BrowserWindow, globalShortcut, ipcMain, screen, type Display } from 'electron';
+import {app, BrowserWindow, clipboard, globalShortcut, ipcMain, screen, type Display } from 'electron';
 
 //Bluetooth Manager
 import { bluetoothManager, type BluetoothDevice, type ConnectionState } from './bluetooth-manager.js'
@@ -13,7 +13,7 @@ import { KeyMonitor } from './keymonitor.js';
 import { MouseMonitor } from './mousemonitor.js';
 
 // Persisted user settings (switch keybind, forwarding toggles)
-import { settingsStore, type AppSettings, type Pc2Layout, type Pc2Side } from './settings-store.js';
+import { settingsStore, type AppSettings, type KeybindType, type Pc2Layout, type Pc2Side } from './settings-store.js';
 
 // Swallows local keystrokes while the keyboard is forwarded to PC2
 import { localKeyBlocker } from './local-key-blocker.js';
@@ -45,6 +45,7 @@ let monitoringActive = false;
 // screen the cursor left from); a manual keybind switch has no crossing, so
 // syncMonitors() falls back to whichever display the cursor sits on.
 let overlayDisplay: Display | null = null;
+let lastKeyboardWrite: Promise<void> = Promise.resolve();
 
 async function createWindow() {
     mainWindow = new BrowserWindow({
@@ -105,8 +106,8 @@ function syncMonitors() {
         overlayDisplay = null;
     }
 
-    // While forwarding, the keyboard belongs to PC2: swallow local keystrokes
-    // so only the switch keybind does anything on this machine.
+    // While forwarding, swallow local keystrokes; app-registered global
+    // shortcuts remain available for switching and clipboard typing.
     if (wantKeyboard) localKeyBlocker.start(settings.switchKeybind);
     else localKeyBlocker.stop();
 
@@ -140,6 +141,68 @@ function registerSwitchKeybind(accelerator: string): boolean {
     } catch {
         // Malformed accelerator string
         return false;
+    }
+}
+
+function registerClipboardKeybind(accelerator: string): boolean {
+    try {
+        return globalShortcut.register(accelerator, () => void sendClipboardToDongle());
+    } catch {
+        return false;
+    }
+}
+
+function unregisterKeybinds(settings: AppSettings) {
+    globalShortcut.unregister(settings.switchKeybind);
+    globalShortcut.unregister(settings.clipboardKeybind);
+}
+
+function registerKeybinds(settings: AppSettings): boolean {
+    const switchRegistered = registerSwitchKeybind(settings.switchKeybind);
+    const clipboardRegistered = registerClipboardKeybind(settings.clipboardKeybind);
+    return switchRegistered && clipboardRegistered;
+}
+
+function sendClipboardStatus(ok: boolean, message: string) {
+    mainWindow?.webContents.send('clipboard:status', { ok, message });
+}
+
+async function sendClipboardToDongle() {
+    if (bluetoothManager.getConnectionState() !== 'connected') {
+        sendClipboardStatus(false, 'Connect to an InterDesk dongle before sending clipboard text.');
+        return;
+    }
+
+    let text: string;
+    try {
+        text = clipboard.readText();
+    } catch (error) {
+        sendClipboardStatus(false, `Could not read the source clipboard: ${error instanceof Error ? error.message : String(error)}`);
+        return;
+    }
+
+    if (!text) {
+        sendClipboardStatus(false, 'The source clipboard is empty or does not contain text.');
+        return;
+    }
+
+    // Do not let the trigger chord or other physical keys interleave with the
+    // clipboard text being typed by the dongle.
+    keyMonitor.setPaused(true);
+    keyMonitor.releaseAllForwardedKeys();
+    try {
+        await lastKeyboardWrite;
+        const result = await bluetoothManager.sendClipboardText(text);
+        sendClipboardStatus(
+            true,
+            result.skippedCharacters > 0
+                ? `Clipboard typed with ${result.skippedCharacters} unsupported character${result.skippedCharacters === 1 ? '' : 's'} skipped.`
+                : 'Clipboard text typed on the target.',
+        );
+    } catch (error) {
+        sendClipboardStatus(false, error instanceof Error ? error.message : String(error));
+    } finally {
+        keyMonitor.setPaused(false);
     }
 }
 
@@ -213,37 +276,60 @@ function registerSettingsIpc() {
         return settings;
     });
 
-    // While the renderer is recording a new keybind, the current one is
-    // suspended so pressing it gets captured instead of toggling monitors.
-    // The key blocker is suspended too, or the recorder window would never
-    // receive the keystrokes being recorded.
-    ipcMain.handle('keybind:begin-capture', () => {
+    // Suspend both global shortcuts while recording so the selected chord is
+    // captured by the renderer, then restore both registrations together.
+    ipcMain.handle('keybind:begin-capture', (_event, type: KeybindType) => {
+        if (type !== 'switch' && type !== 'clipboard') return;
         localKeyBlocker.stop();
-        globalShortcut.unregister(settingsStore.get().switchKeybind);
+        keyMonitor.releaseAllForwardedKeys();
+        keyMonitor.setPaused(true);
+        unregisterKeybinds(settingsStore.get());
     });
-    ipcMain.handle('keybind:cancel-capture', () => {
-        registerSwitchKeybind(settingsStore.get().switchKeybind);
+    ipcMain.handle('keybind:cancel-capture', (_event, type: KeybindType) => {
+        if (type !== 'switch' && type !== 'clipboard') return;
+        const settings = settingsStore.get();
+        registerKeybinds(settings);
+        keyMonitor.setClipboardKeybind(settings.clipboardKeybind);
+        keyMonitor.setPaused(false);
         syncMonitors();
     });
 
-    ipcMain.handle('keybind:set', (_event, accelerator: string) => {
-        if (typeof accelerator !== 'string' || !ACCELERATOR_PATTERN.test(accelerator)) {
+    ipcMain.handle('keybind:set', (_event, type: KeybindType, accelerator: string) => {
+        if ((type !== 'switch' && type !== 'clipboard') || typeof accelerator !== 'string' || !ACCELERATOR_PATTERN.test(accelerator)) {
+            const settings = settingsStore.get();
+            unregisterKeybinds(settings);
+            registerKeybinds(settings);
+            keyMonitor.setPaused(false);
+            syncMonitors();
             return { ok: false, error: `"${accelerator}" is not a valid shortcut.` } as const;
         }
-        const previous = settingsStore.get().switchKeybind;
-        // Release blanket-registered combos so the new accelerator is free to
-        // be registered as the switch keybind; syncMonitors() re-blocks with
-        // the new exclusion afterwards.
+
+        const previous = settingsStore.get();
+        const candidate: AppSettings = type === 'switch'
+            ? { ...previous, switchKeybind: accelerator }
+            : { ...previous, clipboardKeybind: accelerator };
+
+        // Release blanket-registered combos so either new shortcut can be
+        // registered, then roll both back if the OS or the other shortcut
+        // rejects the candidate.
         localKeyBlocker.stop();
-        globalShortcut.unregister(previous);
-        if (registerSwitchKeybind(accelerator)) {
-            const settings = settingsStore.update({ switchKeybind: accelerator });
+        unregisterKeybinds(previous);
+        if (registerKeybinds(candidate)) {
+            const settings = settingsStore.update(type === 'switch'
+                ? { switchKeybind: accelerator }
+                : { clipboardKeybind: accelerator });
+            keyMonitor.setClipboardKeybind(settings.clipboardKeybind);
+            keyMonitor.setPaused(false);
             syncMonitors();
             return { ok: true, settings } as const;
         }
-        registerSwitchKeybind(previous);
+
+        unregisterKeybinds(candidate);
+        registerKeybinds(previous);
+        keyMonitor.setClipboardKeybind(previous.clipboardKeybind);
+        keyMonitor.setPaused(false);
         syncMonitors();
-        return { ok: false, error: `Could not register "${accelerator}" - it may be in use by another app.` } as const;
+        return { ok: false, error: `Could not register "${accelerator}" - it may be in use or conflict with the other shortcut.` } as const;
     });
 
     ipcMain.handle('monitor:get-state', () => monitoringActive);
@@ -255,6 +341,7 @@ function registerSettingsIpc() {
 
 
 app.on('ready', async () => {
+    console.log(`InterDesk v${app.getVersion()} (${isDev() ? 'development' : 'packaged'} build)`);
 
     try {
         await bluetoothManager.initialize();
@@ -274,12 +361,14 @@ app.on('ready', async () => {
     registerSettingsIpc();
     createWindow();
 
-    if (!registerSwitchKeybind(settingsStore.get().switchKeybind)) {
-        console.log('Registration failed. Maybe another app is using this combo?');
+    const settings = settingsStore.get();
+    keyMonitor.setClipboardKeybind(settings.clipboardKeybind);
+    if (!registerKeybinds(settings)) {
+        console.log('One or more shortcuts could not be registered. Check for a system or app shortcut conflict.');
     }
 
-    keyMonitor.on('hid-report', async (report: Buffer) => {
-        await bluetoothManager.sendHidReport(report);
+    keyMonitor.on('hid-report', (report: Buffer) => {
+        lastKeyboardWrite = bluetoothManager.sendHidReport(report);
     })
 
     mouseMonitor.on('hid-report', async (report: Buffer) => {

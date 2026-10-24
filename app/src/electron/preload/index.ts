@@ -14,6 +14,13 @@ export interface BluetoothDevice {
 
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected';
 
+export type KeybindType = 'switch' | 'clipboard';
+
+export interface ClipboardStatus {
+    ok: boolean;
+    message: string;
+}
+
 export type Pc2Side = 'left' | 'right' | 'top' | 'bottom';
 
 export interface Pc2Layout {
@@ -24,6 +31,7 @@ export interface Pc2Layout {
 
 export interface AppSettings {
     switchKeybind: string;
+    clipboardKeybind: string;
     forwardKeyboard: boolean;
     forwardMouse: boolean;
     dynamicSwitch: boolean;
@@ -53,10 +61,10 @@ const bkmdApi = {
         ipcRenderer.invoke('settings:set-forwarding', patch),
     setSwitching: (patch: Partial<Pick<AppSettings, 'dynamicSwitch' | 'mouseMode' | 'pc2Layout'>>): Promise<AppSettings> =>
         ipcRenderer.invoke('settings:set-switching', patch),
-    beginKeybindCapture: (): Promise<void> => ipcRenderer.invoke('keybind:begin-capture'),
-    cancelKeybindCapture: (): Promise<void> => ipcRenderer.invoke('keybind:cancel-capture'),
-    setKeybind: (accelerator: string): Promise<{ ok: true; settings: AppSettings } | { ok: false; error: string }> =>
-        ipcRenderer.invoke('keybind:set', accelerator),
+    beginKeybindCapture: (type: KeybindType): Promise<void> => ipcRenderer.invoke('keybind:begin-capture', type),
+    cancelKeybindCapture: (type: KeybindType): Promise<void> => ipcRenderer.invoke('keybind:cancel-capture', type),
+    setKeybind: (type: KeybindType, accelerator: string): Promise<{ ok: true; settings: AppSettings } | { ok: false; error: string }> =>
+        ipcRenderer.invoke('keybind:set', type, accelerator),
     getMonitorState: (): Promise<boolean> => ipcRenderer.invoke('monitor:get-state'),
     setMonitorState: (active: boolean): Promise<boolean> => ipcRenderer.invoke('monitor:set-state', active),
 
@@ -68,6 +76,8 @@ const bkmdApi = {
         subscribe<[ConnectionState, BluetoothDevice | null]>('bluetooth:connection-state-changed', callback),
     onMonitorStateChanged: (callback: (active: boolean) => void) =>
         subscribe<[boolean]>('monitor:state-changed', callback),
+    onClipboardStatus: (callback: (status: ClipboardStatus) => void) =>
+        subscribe<[ClipboardStatus]>('clipboard:status', callback),
 };
 
 contextBridge.exposeInMainWorld('bkmd', bkmdApi);

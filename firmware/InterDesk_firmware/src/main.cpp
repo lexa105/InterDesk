@@ -16,6 +16,7 @@
 #include "usb/abs_mouse.h"
 
 static QueueHandle_t bleRxQ;
+static QueueHandle_t clipboardRxQ;
 static BleServer* ble = nullptr;
 
 static TaskHandle_t decoderTaskHandle = nullptr;
@@ -52,11 +53,13 @@ static uint8_t hidMouseButtons = 0;
 void setup() {
   Serial.begin(115200);
   
-  //Create BLE recieved queue
+  // Create BLE input and one-slot clipboard queues. Clipboard text is kept
+  // separate so its larger payload cannot fill the live HID report queue.
   bleRxQ = xQueueCreate(16, sizeof(BlePacket));
+  clipboardRxQ = xQueueCreate(1, sizeof(ClipboardTransfer));
 
   // start BLE
-  ble = new BleServer(bleRxQ);
+  ble = new BleServer(bleRxQ, clipboardRxQ);
   ble->start();
 
   gUi.AirDropOn = false;
@@ -109,15 +112,90 @@ void startTasks() {
 
 void DecoderTask(void*) {
   BlePacket pkt;
+  ClipboardTransfer clipboardTransfer{};
+  bool typingClipboard = false;
+  size_t clipboardOffset = 0;
+  uint16_t skippedCharacters = 0;
   static uint32_t last = 0;
   for (;;) {
-    if (xQueueReceive(bleRxQ, &pkt, portMAX_DELAY) == pdTRUE) {
+    // Live keyboard/mouse reports win over clipboard typing. Type at most one
+    // codepoint between queue checks so mouse and physical keyboard traffic
+    // remains responsive throughout a transfer.
+    if (xQueueReceive(bleRxQ, &pkt, 0) == pdTRUE) {
       if (pkt.type == BlePacketType::Disconnected) {
         hid_release_all();
+        typingClipboard = false;
       } else if (!hid_decode(pkt)) {
         ui_set_debug("HID BAD");
       }
+      continue;
     }
+
+    if (!typingClipboard && xQueueReceive(clipboardRxQ, &clipboardTransfer, 0) == pdTRUE) {
+      typingClipboard = true;
+      clipboardOffset = 0;
+      skippedCharacters = 0;
+    }
+
+    if (typingClipboard) {
+      if (clipboardOffset >= clipboardTransfer.len) {
+        ble->notifyClipboardResult(clipboardTransfer.transferId, true, skippedCharacters);
+        typingClipboard = false;
+        continue;
+      }
+
+      const uint8_t first = clipboardTransfer.data[clipboardOffset++];
+      uint32_t codepoint = first;
+      uint8_t continuationCount = 0;
+      bool valid = true;
+      if (first < 0x80) {
+        codepoint = first;
+      } else if (first >= 0xc2 && first <= 0xdf) {
+        codepoint = first & 0x1f;
+        continuationCount = 1;
+      } else if (first >= 0xe0 && first <= 0xef) {
+        codepoint = first & 0x0f;
+        continuationCount = 2;
+      } else if (first >= 0xf0 && first <= 0xf4) {
+        codepoint = first & 0x07;
+        continuationCount = 3;
+      } else {
+        valid = false;
+      }
+
+      if (valid && continuationCount > 0) {
+        if (clipboardOffset + continuationCount > clipboardTransfer.len) {
+          valid = false;
+        } else {
+          for (uint8_t i = 0; i < continuationCount; i++) {
+            const uint8_t continuation = clipboardTransfer.data[clipboardOffset + i];
+            if ((continuation & 0xc0) != 0x80) {
+              valid = false;
+              break;
+            }
+            codepoint = (codepoint << 6) | (continuation & 0x3f);
+          }
+          if (valid && ((continuationCount == 1 && codepoint < 0x80) ||
+                        (continuationCount == 2 && codepoint < 0x800) ||
+                        (continuationCount == 3 && codepoint < 0x10000) ||
+                        (codepoint >= 0xd800 && codepoint <= 0xdfff) || codepoint > 0x10ffff)) {
+            valid = false;
+          }
+          if (valid) clipboardOffset += continuationCount;
+        }
+      }
+
+      if (valid && (codepoint == '\n' || codepoint == '\t' || (codepoint >= 0x20 && codepoint <= 0x7e))) {
+        if (keyboard.write(static_cast<uint8_t>(codepoint)) == 0) skippedCharacters++;
+      } else {
+        skippedCharacters++;
+      }
+
+      vTaskDelay(1);
+      continue;
+    }
+
+    vTaskDelay(1);
 
     //
     if (millis() - last > 5000) {

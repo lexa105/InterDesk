@@ -54,3 +54,16 @@ void CharacteristicDataCallbacks::onWrite(
         Serial.println("BLE HID queue full; report dropped");
     }
 }
+
+void ClipboardDataCallbacks::onWrite(
+    NimBLECharacteristic* characteristic,
+    NimBLEConnInfo&
+) {
+    const std::string value = characteristic->getValue();
+    if (value.empty()) return;
+
+    _owner.handleClipboardFrame(
+        reinterpret_cast<const uint8_t*>(value.data()),
+        value.size()
+    );
+}
