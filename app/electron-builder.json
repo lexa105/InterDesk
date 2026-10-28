@@ -5,7 +5,10 @@
   "extraResources": ["dist-electron/preload.cjs", "src/assets/**"],
   "icon": "./desktopIcon.png",
   "mac": {
-    "target": "dmg"
+    "target": "dmg",
+    "extendInfo": {
+      "NSBluetoothAlwaysUsageDescription": "InterDesk connects to your InterDesk dongle over Bluetooth."
+    }
   },
   "linux": {
     "target": "AppImage",
